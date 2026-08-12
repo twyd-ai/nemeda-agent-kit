@@ -1,0 +1,17 @@
+{
+  "description": "Load repository-owned Agent Kit context when a session starts.",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/session-context.mjs\"",
+            "timeout": 10,
+            "statusMessage": "Loading repository context"
+          }
+        ]
+      }
+    ]
+  }
+}

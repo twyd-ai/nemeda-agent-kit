@@ -1,0 +1,36 @@
+{
+  "schemaVersion": 1,
+  "project": {
+    "id": "scharlab",
+    "name": "Scharlab"
+  },
+  "workspace": {
+    "repositories": [
+      {
+        "id": "scharlab-backend",
+        "path": "backend",
+        "role": "backend",
+        "profiles": ["python", "fastapi", "postgresql"]
+      },
+      {
+        "id": "scharlab-frontend",
+        "path": "frontend",
+        "role": "frontend",
+        "profiles": ["typescript", "nextjs", "react"]
+      }
+    ]
+  },
+  "context": {
+    "instructions": ["AGENTS.md"],
+    "documents": []
+  },
+  "tools": {
+    "required": ["git", "github"],
+    "optional": ["google-drive", "airtable"]
+  },
+  "policies": {
+    "protectSecrets": true,
+    "conversationLanguage": "es",
+    "artifactLanguage": "en"
+  }
+}
