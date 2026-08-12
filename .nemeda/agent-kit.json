@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "project": {
+    "id": "nemeda-agent-kit",
+    "name": "Nemeda Agent Kit"
+  },
+  "repository": {
+    "id": "nemeda-agent-kit",
+    "role": "agent-toolkit",
+    "profiles": ["javascript", "mcp", "agent-plugins"]
+  },
+  "context": {
+    "instructions": ["AGENTS.md"],
+    "documents": ["docs/architecture.md", "docs/configuration.md"]
+  },
+  "tools": {
+    "required": ["git", "github", "node"],
+    "optional": ["codex", "claude"]
+  },
+  "policies": {
+    "protectSecrets": true,
+    "conversationLanguage": "es",
+    "artifactLanguage": "en"
+  }
+}

@@ -1,0 +1,42 @@
+{
+  "schemaVersion": 1,
+  "project": {
+    "id": "milence",
+    "name": "Milence"
+  },
+  "workspace": {
+    "repositories": [
+      {
+        "id": "milence-core",
+        "path": "backend",
+        "role": "backend-reference",
+        "profiles": ["typescript", "nestjs"]
+      },
+      {
+        "id": "milence-mobile-app",
+        "path": "mobile/react-native/react-native",
+        "role": "mobile-react-native",
+        "profiles": ["typescript", "expo", "react-native"]
+      },
+      {
+        "id": "milence-ios",
+        "path": "mobile/ios",
+        "role": "mobile-native-ios",
+        "profiles": ["swift", "swiftui"]
+      }
+    ]
+  },
+  "context": {
+    "instructions": ["AGENTS.md"],
+    "documents": []
+  },
+  "tools": {
+    "required": ["git", "github"],
+    "optional": ["google-drive", "airtable", "figma", "apple-docs"]
+  },
+  "policies": {
+    "protectSecrets": true,
+    "conversationLanguage": "es",
+    "artifactLanguage": "en"
+  }
+}

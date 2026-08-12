@@ -1,0 +1,27 @@
+{
+  "name": "nemeda-agent-kit",
+  "version": "0.1.0",
+  "description": "Portable methodology, tools, and repository context for AI coding agents.",
+  "author": {
+    "name": "Marc Noguera",
+    "url": "https://github.com/marcnaa"
+  },
+  "repository": "https://github.com/marcnaa/nemeda-agent-kit",
+  "keywords": ["agents", "codex", "claude", "mcp", "workspace"],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Nemeda Agent Kit",
+    "shortDescription": "One agent workflow across every repository.",
+    "longDescription": "Loads repository-owned context, provides workspace diagnostics, and applies a shared methodology across Codex, Claude Code, and compatible agents.",
+    "developerName": "Marc Noguera",
+    "category": "Developer Tools",
+    "capabilities": ["Read", "Write", "MCP"],
+    "brandColor": "#5B4BDB",
+    "defaultPrompt": [
+      "Inspect this repository with Nemeda Agent Kit.",
+      "Run the workspace doctor and explain any gaps.",
+      "Initialize Agent Kit safely in this repository."
+    ]
+  },
+  "mcpServers": "./.mcp.json"
+}

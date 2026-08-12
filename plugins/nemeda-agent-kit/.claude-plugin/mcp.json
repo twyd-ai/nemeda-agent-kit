@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "workspace-context": {
+      "type": "stdio",
+      "command": "node",
+      "args": [
+        "${CLAUDE_PLUGIN_ROOT}/scripts/mcp-server.mjs"
+      ],
+      "env": {
+        "NEMEDA_WORKSPACE_CWD": "${CLAUDE_PROJECT_DIR}"
+      }
+    }
+  }
+}

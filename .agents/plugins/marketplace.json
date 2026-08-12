@@ -1,0 +1,20 @@
+{
+  "name": "nemeda-agent-kit-private",
+  "interface": {
+    "displayName": "Nemeda Agent Kit Private"
+  },
+  "plugins": [
+    {
+      "name": "nemeda-agent-kit",
+      "source": {
+        "source": "local",
+        "path": "./plugins/nemeda-agent-kit"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Developer Tools"
+    }
+  ]
+}

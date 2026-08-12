@@ -1,0 +1,13 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "nemeda-agent-kit",
+  "version": "0.1.0",
+  "description": "Portable methodology, tools, and repository context for AI coding agents.",
+  "author": {
+    "name": "Marc Noguera",
+    "url": "https://github.com/marcnaa"
+  },
+  "homepage": "https://github.com/marcnaa/nemeda-agent-kit",
+  "repository": "https://github.com/marcnaa/nemeda-agent-kit",
+  "keywords": ["agents", "mcp", "workspace", "methodology"]
+}
