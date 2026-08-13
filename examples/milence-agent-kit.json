@@ -10,7 +10,9 @@
         "id": "milence-core",
         "path": "backend",
         "role": "backend-reference",
-        "profiles": ["typescript", "nestjs"]
+        "profiles": ["typescript", "nestjs"],
+        "remote": "https://github.com/milence-it-eng/milence-core.git",
+        "branch": "main"
       },
       {
         "id": "milence-mobile-app",
@@ -25,6 +27,31 @@
         "profiles": ["swift", "swiftui"]
       }
     ]
+  },
+  "drive": {
+    "sharedDrive": "Milence",
+    "links": {
+      "docs": "docs",
+      "config": "config",
+      ".claude/skills": "skills",
+      ".claude/commands": "commands"
+    }
+  },
+  "airtable": {
+    "baseId": "appbuFqYt0o1E1Uhb",
+    "tasks": {
+      "tableId": "tblRw1YxcyRDKKhdf",
+      "statusField": "Status",
+      "notesField": "Notes",
+      "statusInProgress": "In progress",
+      "statusDone": "Completed"
+    },
+    "knowledgeLog": {
+      "baseId": "appP3KJCLuNaQfrBH",
+      "tableId": "tblgqAuwSqfsjM7Cq"
+    },
+    "reconcileRepos": ["milence-it-eng/milence-core"],
+    "lookbackDays": 21
   },
   "context": {
     "instructions": ["AGENTS.md"],

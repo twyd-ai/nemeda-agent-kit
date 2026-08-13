@@ -96,6 +96,102 @@
           "type": "string"
         }
       }
+    },
+    "drive": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sharedDrive", "links"],
+      "properties": {
+        "sharedDrive": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Name of the Google shared drive that holds docs, config, skills, and commands."
+        },
+        "links": {
+          "type": "object",
+          "minProperties": 1,
+          "description": "Map of workspace-relative symlink paths to shared-drive-relative folders.",
+          "additionalProperties": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "airtable": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["baseId"],
+      "properties": {
+        "baseId": {
+          "type": "string",
+          "pattern": "^app[a-zA-Z0-9]{14}$"
+        },
+        "tasks": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["tableId", "statusField", "notesField", "statusInProgress", "statusDone"],
+          "properties": {
+            "tableId": {
+              "type": "string",
+              "pattern": "^tbl[a-zA-Z0-9]{14}$"
+            },
+            "statusField": {
+              "type": "string",
+              "minLength": 1
+            },
+            "notesField": {
+              "type": "string",
+              "minLength": 1
+            },
+            "statusInProgress": {
+              "type": "string",
+              "minLength": 1
+            },
+            "statusDone": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
+        "knowledgeLog": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["tableId"],
+          "properties": {
+            "baseId": {
+              "type": "string",
+              "pattern": "^app[a-zA-Z0-9]{14}$",
+              "description": "Optional override when the Knowledge Log lives in a different base."
+            },
+            "tableId": {
+              "type": "string",
+              "pattern": "^tbl[a-zA-Z0-9]{14}$"
+            },
+            "people": {
+              "type": "object",
+              "description": "Map of git user.email to the person's Airtable record id.",
+              "additionalProperties": {
+                "type": "string",
+                "pattern": "^rec[a-zA-Z0-9]{14}$"
+              }
+            }
+          }
+        },
+        "reconcileRepos": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[\\w.-]+/[\\w.-]+$"
+          },
+          "description": "GitHub owner/repo list scanned for merged PRs during reconciliation."
+        },
+        "lookbackDays": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 365
+        }
+      }
     }
   },
   "oneOf": [
@@ -150,6 +246,15 @@
           "items": {
             "type": "string"
           }
+        },
+        "remote": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Git URL cloned by `nemeda-agent setup` when the path is missing."
+        },
+        "branch": {
+          "type": "string",
+          "minLength": 1
         }
       }
     }

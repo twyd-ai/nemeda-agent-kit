@@ -6,16 +6,27 @@ Nemeda Agent Kit separates portable agent behavior from repository-owned context
 Plugin: reusable and versioned
   ├── skills        methodology and repeatable workflows
   ├── MCP           read-only context and diagnostics
-  ├── hooks         thin lifecycle adapter
-  └── CLI           deterministic init and doctor
+  ├── hooks         session context + parameterized Airtable automations
+  └── CLI           deterministic init, setup, and doctor
 
 Repository: specific and reviewable
-  ├── .nemeda/agent-kit.json   identity, profiles, tools, context paths
+  ├── .nemeda/agent-kit.json   identity, profiles, tools, Drive links, Airtable ids
   └── AGENTS.md                durable human instructions
+
+Machine-local: assembled by `setup`, verified by `doctor`, never committed
+  ├── docs/, config/, .claude/skills, .claude/commands   symlinks into Drive
+  ├── nested code repository clones
+  ├── .env.local               personal secrets (AIRTABLE_API_KEY)
+  └── .nemeda/state/           hook throttles and dedupe caches
 
 External systems: live and authorized
   └── GitHub, Drive, Airtable, Slack, Figma, calendars, and other MCP connectors
 ```
+
+The Airtable hooks are deliberately indirect: the agent only labels PR bodies
+with `Airtable: recXXX`; observation of `gh pr create` and of merged PRs moves
+task status. The agent never mutates client-visible state directly, and the
+hooks never block a tool (they always exit 0).
 
 ## Portability boundary
 

@@ -1,5 +1,5 @@
 {
-  "description": "Load repository-owned Agent Kit context when a session starts.",
+  "description": "Load repository-owned Agent Kit context and run the Airtable automations. Every hook is a fast no-op unless .nemeda/agent-kit.json configures the matching section.",
   "hooks": {
     "SessionStart": [
       {
@@ -9,6 +9,35 @@
             "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/session-context.mjs\"",
             "timeout": 10,
             "statusMessage": "Loading repository context"
+          },
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/hooks/pr-airtable-reconcile.mjs\"",
+            "timeout": 30,
+            "statusMessage": "Reconciling merged PRs with Airtable"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/hooks/pr-airtable-sync.mjs\"",
+            "timeout": 20
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/hooks/session-log.mjs\"",
+            "timeout": 15
           }
         ]
       }

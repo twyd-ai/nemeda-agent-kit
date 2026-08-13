@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
@@ -40,6 +40,29 @@ test("configuration schema enforces exclusive repository modes", () => {
   assert.equal(schema.anyOf, undefined);
   assert.deepEqual(schema.$defs.workspaceRepository.required, ["id", "path", "role", "profiles"]);
   assert.equal(schema.$defs.workspaceRepository.additionalProperties, false);
+});
+
+// Every path a host resolves at runtime must exist relative to the plugin
+// root, whether written as ./relative or through a ${…_PLUGIN_ROOT} variable.
+// A broken reference here means a host silently loses tools or hooks.
+test("manifest and hook references point at existing files", () => {
+  const manifestPaths = [
+    ".claude-plugin/plugin.json",
+    ".codex-plugin/plugin.json",
+    ".claude-plugin/mcp.json",
+    ".mcp.json",
+    "mcp.json",
+    "hooks/hooks.json"
+  ];
+  const referencePattern = /"(?:\.\/|\$\{[A-Z_]*PLUGIN_ROOT\}\/)([^"\\\s]+?)\\?"|\$\{[A-Z_]*PLUGIN_ROOT\}\/([^"\\\s]+?\.mjs)/g;
+  for (const manifestPath of manifestPaths) {
+    const raw = readFileSync(path.join(pluginRoot, manifestPath), "utf8");
+    for (const match of raw.matchAll(referencePattern)) {
+      const reference = (match[1] || match[2]).replace(/\/$/, "");
+      assert.equal(existsSync(path.join(pluginRoot, reference)), true, `${manifestPath} references missing ${reference}`);
+    }
+    assert.equal(raw.includes('"cwd"'), false, `${manifestPath} must not pin a cwd; the server resolves the workspace itself`);
+  }
 });
 
 test("dogfood and sanitized example configurations pass runtime validation", () => {

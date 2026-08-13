@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { setupWorkspace } from "./lib/setup.mjs";
 import {
   defaultWorkspaceDirectory,
   formatContextForHook,
@@ -18,6 +19,8 @@ function parseArguments(argv) {
     else if (value === "--project-name") options.projectName = rest[++index];
     else if (value === "--role") options.role = rest[++index];
     else if (value === "--profile") options.profiles.push(rest[++index]);
+    else if (value === "--workspace") options.workspace = true;
+    else if (value === "--dry-run") options.dryRun = true;
     else throw new Error(`Unknown argument: ${value}`);
   }
   return { command, options };
@@ -33,14 +36,19 @@ function help() {
 
 Usage:
   nemeda-agent init [--cwd PATH] [--project-id ID] [--project-name NAME]
-                    [--role ROLE] [--profile PROFILE ...]
+                    [--role ROLE] [--profile PROFILE ...] [--workspace]
+  nemeda-agent setup [--cwd PATH] [--json] [--dry-run]
   nemeda-agent context [--cwd PATH] [--json]
   nemeda-agent doctor [--cwd PATH] [--json]
 
 Commands:
   init     Create missing .nemeda/agent-kit.json and AGENTS.md safely.
+           --workspace scans nested Git repositories into a workspace config.
+  setup    Assemble machine-local pieces: Drive symlinks, declared repository
+           clones, the .env.local template, and .gitignore entries. Idempotent;
+           never overwrites existing files.
   context  Show the normalized repository context.
-  doctor   Run read-only configuration and host diagnostics.
+  doctor   Run read-only configuration, Drive, Airtable, and host diagnostics.
 `;
 }
 
@@ -58,9 +66,26 @@ export function run(argv = process.argv.slice(2)) {
         root: result.root,
         created: [result.configPath, ...(result.agentsCreated ? [result.agentsPath] : [])],
         preserved: result.agentsCreated ? [] : [result.agentsPath],
-        profiles: result.config.repository.profiles
+        ...(result.config.repository
+          ? { profiles: result.config.repository.profiles }
+          : { repositories: result.config.workspace.repositories.map((repository) => repository.path) })
       }, options.json);
       return 0;
+    }
+    if (command === "setup") {
+      const report = setupWorkspace(cwd, options);
+      if (options.json) print(report, true);
+      else {
+        console.log(`Nemeda Agent Kit setup${report.dryRun ? " (dry run)" : ""} at ${report.root}`);
+        for (const entry of report.actions) {
+          console.log(`[${entry.status.toUpperCase()}] ${entry.kind}: ${entry.message}`);
+        }
+        if (report.nextSteps.length) {
+          console.log("\nNext steps:");
+          for (const step of report.nextSteps) console.log(`  - ${step}`);
+        }
+      }
+      return report.actions.some((entry) => entry.status === "error") ? 1 : 0;
     }
     if (command === "context") {
       const context = readWorkspaceContext(cwd);
