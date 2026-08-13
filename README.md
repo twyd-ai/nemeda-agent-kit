@@ -24,14 +24,19 @@ project instructions stay in `AGENTS.md`.
   entries — all declared in `.nemeda/agent-kit.json` instead of per-project
   shell scripts.
 - **Airtable automations as plugin hooks**, parameterized by the same config:
-  - `gh pr create` with an `Airtable: recXXX` line in the body moves the linked
-    task to the configured in-progress status and records the PR link.
-  - A session-start reconciler finds merged PRs (via `gh`) and moves their
-    tasks to the done status (throttled to once per 12 h, idempotent).
+  - A session-start reconciler reads open and merged PRs directly from GitHub
+    (via `gh pr list`) and moves tasks with a matching `Airtable: recXXX` line
+    to the configured in-progress or done status (throttled to once per 12 h,
+    idempotent). This is the authoritative sync — it works no matter how the
+    PR was opened (web UI, another machine, `gh` CLI), because it reads
+    GitHub's own PR state instead of watching for a local command.
+  - `gh pr create` run from the agent's own Bash tool gets an immediate
+    fast-path update on top of that, for instant feedback.
   - An opt-in session logger (`KNOWLEDGE_LOG_AUTO=true`) creates one Pending
     Knowledge Log entry per session.
-  Every hook is a fast no-op in repositories without an `airtable` section, and
-  never blocks the tool that triggered it.
+  Every hook is a fast no-op in repositories without an `airtable` section,
+  never blocks the tool that triggered it, and requires `gh` to be installed
+  and authenticated — `nemeda-agent doctor` checks both explicitly.
 - Native manifests and marketplaces for Codex and Claude Code.
 - A portable Agent Plugins `plugin.json` + `mcp.json` core.
 - A versioned JSON Schema and sanitized Milence/Scharlab examples.

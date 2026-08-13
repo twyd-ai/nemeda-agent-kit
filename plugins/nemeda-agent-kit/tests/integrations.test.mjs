@@ -1,18 +1,34 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
 import { extractPrUrl, extractRecordIds, noteWithPr } from "../scripts/lib/airtable.mjs";
 import { loadEnvLocal } from "../scripts/lib/env.mjs";
-import { prSyncFromEvent, reconcileMergedPrs } from "../scripts/lib/hooks.mjs";
+import { prSyncFromEvent, reconcilePrs } from "../scripts/lib/hooks.mjs";
 import { setupWorkspace } from "../scripts/lib/setup.mjs";
 import { initializeWorkspace, validateConfig, workspaceDoctor } from "../scripts/lib/workspace.mjs";
 
 function temporaryDirectory() {
   return mkdtempSync(path.join(os.tmpdir(), "nemeda-agent-kit-"));
+}
+
+// Installs a fake `gh` on PATH so reconcilePrs can be tested without network
+// access or a real GitHub CLI. Returns an environment with PATH prepended.
+function withFakeGh(environment, { open = [], merged = [] } = {}) {
+  const binDir = temporaryDirectory();
+  const script = `#!/usr/bin/env node
+const args = process.argv.slice(2);
+const state = args[args.indexOf("--state") + 1];
+const data = ${JSON.stringify({ open, merged })};
+process.stdout.write(JSON.stringify(state === "open" ? data.open : data.merged));
+`;
+  const ghPath = path.join(binDir, "gh");
+  writeFileSync(ghPath, script);
+  chmodSync(ghPath, 0o755);
+  return { ...environment, PATH: `${binDir}${path.delimiter}${environment.PATH || process.env.PATH}` };
 }
 
 const TASKS = {
@@ -239,10 +255,39 @@ test("reconcile hook is throttled between runs", async () => {
   const environment = { ...process.env, PR_AIRTABLE_SYNC_DRYRUN: "true", PR_RECONCILE_REPO: "example/none" };
   delete environment.CLAUDE_PROJECT_DIR;
 
-  const first = await reconcileMergedPrs({ cwd: root }, environment);
+  const first = await reconcilePrs({ cwd: root }, environment);
   assert.equal(first.dryRun, true);
-  const second = await reconcileMergedPrs({ cwd: root }, environment);
+  const second = await reconcilePrs({ cwd: root }, environment);
   assert.equal(second.skipped, "throttled");
-  const forced = await reconcileMergedPrs({ cwd: root }, environment, { force: true });
+  const forced = await reconcilePrs({ cwd: root }, environment, { force: true });
   assert.equal(forced.dryRun, true);
+});
+
+test("reconcile detects open and merged PRs from GitHub directly, without a local `gh pr create` command", async () => {
+  const root = temporaryDirectory();
+  writeWorkspace(root);
+  const environment = withFakeGh({ ...process.env, PR_AIRTABLE_SYNC_DRYRUN: "true", PR_RECONCILE_REPO: "example/backend" }, {
+    open: [{ number: 1, url: "https://github.com/example/backend/pull/1", body: "Airtable: recOPENOPENOPENA1", createdAt: new Date().toISOString() }],
+    merged: [{ number: 2, url: "https://github.com/example/backend/pull/2", body: "Airtable: recDONEDONEDONEB2", mergedAt: new Date().toISOString() }]
+  });
+  delete environment.CLAUDE_PROJECT_DIR;
+
+  const result = await reconcilePrs({ cwd: root }, environment);
+  assert.equal(result.dryRun, true);
+  assert.deepEqual(result.inProgressTargets, { recOPENOPENOPENA1: "https://github.com/example/backend/pull/1" });
+  assert.deepEqual(result.doneTargets, { recDONEDONEDONEB2: "https://github.com/example/backend/pull/2" });
+});
+
+test("reconcile lets a merged PR win over a stale open one for the same task", async () => {
+  const root = temporaryDirectory();
+  writeWorkspace(root);
+  const environment = withFakeGh({ ...process.env, PR_AIRTABLE_SYNC_DRYRUN: "true", PR_RECONCILE_REPO: "example/backend" }, {
+    open: [{ number: 1, url: "https://github.com/example/backend/pull/1", body: "Airtable: recSAMESAMESAME01", createdAt: new Date().toISOString() }],
+    merged: [{ number: 3, url: "https://github.com/example/backend/pull/3", body: "Airtable: recSAMESAMESAME01", mergedAt: new Date().toISOString() }]
+  });
+  delete environment.CLAUDE_PROJECT_DIR;
+
+  const result = await reconcilePrs({ cwd: root }, environment);
+  assert.deepEqual(result.inProgressTargets, {});
+  assert.deepEqual(result.doneTargets, { recSAMESAMESAME01: "https://github.com/example/backend/pull/3" });
 });

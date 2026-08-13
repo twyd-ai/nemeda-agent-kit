@@ -121,7 +121,6 @@ gitignored `.env.local` (`AIRTABLE_API_KEY`).
       "statusDone": "Completed"
     },
     "knowledgeLog": {
-      "baseId": "appYYYYYYYYYYYYYY",
       "tableId": "tblYYYYYYYYYYYYYY",
       "people": { "person@example.com": "recXXXXXXXXXXXXXX" }
     },
@@ -131,14 +130,27 @@ gitignored `.env.local` (`AIRTABLE_API_KEY`).
 }
 ```
 
-- `tasks` drives the PR hooks: a PR body line `Airtable: recXXXXXXXXXXXXXX`
+- `tasks` and `knowledgeLog` both live in the base identified by the
+  top-level `airtable.baseId` (Airtable's REST API is per-base, not
+  per-table, so this is the only base id needed).
+- `tasks` drives the PR sync: a PR body line `Airtable: recXXXXXXXXXXXXXX`
   (or a task-table URL) links the PR; unlabelled record ids are ignored on
   purpose. Statuses must match the single-select options exactly.
-- `knowledgeLog.baseId` is optional — for teams that keep the log in a
-  separate internal base. `people` maps `git config user.email` to the
-  person's record id.
-- `reconcileRepos` are scanned with `gh pr list --state merged` on session
-  start (12 h throttle; `--force` bypasses when run by hand).
+- `knowledgeLog.people` maps `git config user.email` to the person's record
+  id in the Team/People table.
+- `reconcileRepos` are the **authoritative** source of PR status: on session
+  start (12 h throttle; `--force` bypasses when run by hand), `gh pr list` is
+  read for both `--state open` (→ `statusInProgress`) and `--state merged`
+  (→ `statusDone`, bounded by `lookbackDays`). This works regardless of how
+  the PR was opened — web UI, another machine, or the `gh` CLI — because it
+  reads GitHub's PR state directly rather than watching for a local command.
+  A merged PR always wins over a stale open one for the same task, and a task
+  already marked done is never moved backwards.
+  Requires `gh` installed and authenticated; `nemeda-agent doctor` checks
+  both and tells them apart.
+- The `PostToolUse` hook on `gh pr create` is a fast-path only: it gives
+  immediate feedback when the agent itself opens the PR from Bash, on top of
+  the reconciler above — it is not a substitute for it.
 - Environment switches in `.env.local`: `PR_AIRTABLE_SYNC_DISABLED`,
   `PR_AIRTABLE_SYNC_DRYRUN`, `KNOWLEDGE_LOG_AUTO`, `AIRTABLE_PERSON_ID`,
   `PR_RECONCILE_REPO`, `PR_RECONCILE_LOOKBACK_DAYS`.

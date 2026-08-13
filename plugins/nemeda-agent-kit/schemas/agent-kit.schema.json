@@ -184,7 +184,7 @@
             "type": "string",
             "pattern": "^[\\w.-]+/[\\w.-]+$"
           },
-          "description": "GitHub owner/repo list scanned for merged PRs during reconciliation."
+          "description": "GitHub owner/repo list scanned for open and merged PRs during reconciliation."
         },
         "lookbackDays": {
           "type": "integer",

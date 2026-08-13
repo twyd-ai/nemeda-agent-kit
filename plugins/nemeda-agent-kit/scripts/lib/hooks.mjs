@@ -44,6 +44,10 @@ function syncDryRun(environment) {
   return flagEnabled("PR_AIRTABLE_SYNC_DRYRUN", environment);
 }
 
+// Fast-path only: gives immediate feedback when the agent itself runs
+// `gh pr create` from Bash. It does NOT cover PRs opened from the GitHub web
+// UI, another machine, or without `gh` installed — reconcilePrs (SessionStart)
+// is what makes the sync authoritative by reading GitHub's PR list directly.
 export async function prSyncFromEvent(event, environment = process.env) {
   if (event?.tool_name !== "Bash") return { skipped: "not-bash" };
   const command = event?.tool_input?.command || "";
@@ -109,23 +113,35 @@ function stampReconcile(root, now = new Date()) {
   }
 }
 
-function listMergedPrs(repo, lookbackDays, environment) {
-  let parsed;
+// Lists PRs for a repo in the given state via `gh` (works no matter how the
+// PR was opened — web UI, another machine, VS Code — because it reads GitHub
+// itself rather than observing a local command).
+function listPrs(repo, state, environment) {
   try {
     const output = execFileSync(
       "gh",
-      ["pr", "list", "--repo", repo, "--state", "merged", "--limit", "60", "--json", "number,url,body,mergedAt"],
+      ["pr", "list", "--repo", repo, "--state", state, "--limit", "60", "--json", "number,url,body,mergedAt,createdAt"],
       { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], env: environment }
     );
-    parsed = JSON.parse(output);
+    return JSON.parse(output);
   } catch {
-    return [];
+    return []; // gh missing/unauthenticated, or repo unreachable: skip quietly.
   }
-  const cutoff = Date.now() - lookbackDays * 86_400_000;
-  return parsed.filter((pr) => pr.mergedAt && new Date(pr.mergedAt).getTime() >= cutoff);
 }
 
-export async function reconcileMergedPrs(event, environment = process.env, options = {}) {
+function withinLookback(pr, dateField, lookbackDays) {
+  const value = pr[dateField];
+  if (!value) return false;
+  return Date.now() - new Date(value).getTime() <= lookbackDays * 86_400_000;
+}
+
+// Authoritative status sync: derives Airtable task status from GitHub's own
+// PR list (open -> in progress, merged -> done) instead of relying on the
+// agent having run `gh pr create` from a local Bash tool. That local-command
+// hook (prSyncFromEvent) is only a fast-path for immediate feedback; this
+// reconcile also catches PRs opened from the GitHub web UI or another
+// machine, which never fire a PostToolUse event here.
+export async function reconcilePrs(event, environment = process.env, options = {}) {
   const workspace = resolveHookWorkspace(event, environment);
   if (!workspace?.airtable?.tasks) return { skipped: "no-airtable-tasks" };
   if (syncDisabled(environment)) return { skipped: "disabled" };
@@ -137,41 +153,60 @@ export async function reconcileMergedPrs(event, environment = process.env, optio
   if (repos.length === 0) return { skipped: "no-reconcile-repos" };
   const lookbackDays = Number.parseInt(environment.PR_RECONCILE_LOOKBACK_DAYS || "", 10) || workspace.airtable.lookbackDays || 21;
 
-  // recordId -> merged PR url (last one wins if a task has several PRs).
-  const targets = {};
+  // recordId -> PR url. Merged wins over open when a task has PRs in both
+  // states (Done is scanned second and overwrites the in-progress target).
+  const inProgressTargets = {};
+  const doneTargets = {};
   for (const repo of repos) {
-    for (const pr of listMergedPrs(repo, lookbackDays, environment)) {
-      for (const recordId of extractRecordIds(pr.body, tasks.tableId)) {
-        targets[recordId] = pr.url || "";
-      }
+    // Open PRs stay relevant regardless of age; --limit already bounds the scan.
+    for (const pr of listPrs(repo, "open", environment)) {
+      for (const recordId of extractRecordIds(pr.body, tasks.tableId)) inProgressTargets[recordId] = pr.url || "";
+    }
+    // Merges are bounded by lookbackDays so old, already-reconciled merges
+    // aren't re-fetched from Airtable on every session.
+    for (const pr of listPrs(repo, "merged", environment)) {
+      if (!withinLookback(pr, "mergedAt", lookbackDays)) continue;
+      for (const recordId of extractRecordIds(pr.body, tasks.tableId)) doneTargets[recordId] = pr.url || "";
     }
   }
+  for (const recordId of Object.keys(doneTargets)) delete inProgressTargets[recordId];
 
   if (syncDryRun(environment)) {
     stampReconcile(workspace.root);
-    return { dryRun: true, repos, targets, status: tasks.statusDone };
+    return { dryRun: true, repos, inProgressTargets, doneTargets, statusInProgress: tasks.statusInProgress, statusDone: tasks.statusDone };
   }
   const apiKey = environment.AIRTABLE_API_KEY || "";
   if (!apiKey) return { skipped: "no-api-key" };
 
   const moved = [];
   const errors = [];
-  for (const [recordId, prUrl] of Object.entries(targets)) {
+  const applyTransition = async (recordId, prUrl, status, notePrefix) => {
     try {
       const record = await getRecord(apiKey, baseId, tasks.tableId, recordId);
-      if (record.fields?.[tasks.statusField] === tasks.statusDone) continue; // idempotent
-      const fields = { [tasks.statusField]: tasks.statusDone };
+      const currentStatus = record.fields?.[tasks.statusField];
+      // Never move a completed task backwards, and skip no-op transitions.
+      if (currentStatus === tasks.statusDone || currentStatus === status) return;
+      const fields = { [tasks.statusField]: status };
       if (prUrl) {
-        Object.assign(fields, noteWithPr(tasks.notesField, record.fields?.[tasks.notesField], `Merged (${formatShortDate()}): ${prUrl}`));
+        Object.assign(fields, noteWithPr(tasks.notesField, record.fields?.[tasks.notesField], `${notePrefix} (${formatShortDate()}): ${prUrl}`));
       }
       await patchRecord(apiKey, baseId, tasks.tableId, recordId, fields);
-      moved.push(recordId);
+      moved.push({ recordId, status });
     } catch (error) {
       errors.push(`${recordId}: ${error instanceof Error ? error.message : String(error)}`);
     }
+  };
+  for (const [recordId, prUrl] of Object.entries(inProgressTargets)) {
+    await applyTransition(recordId, prUrl, tasks.statusInProgress, "PR");
   }
+  for (const [recordId, prUrl] of Object.entries(doneTargets)) {
+    await applyTransition(recordId, prUrl, tasks.statusDone, "Merged");
+  }
+
   stampReconcile(workspace.root);
-  const systemMessage = moved.length ? `Airtable: ${moved.length} merged task(s) -> "${tasks.statusDone}"` : undefined;
+  const systemMessage = moved.length
+    ? `Airtable: ${moved.length} task(s) updated (${moved.map((entry) => entry.status).join(", ")}).`
+    : undefined;
   return { moved, errors, systemMessage };
 }
 

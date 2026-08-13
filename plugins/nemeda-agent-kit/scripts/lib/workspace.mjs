@@ -557,17 +557,25 @@ function airtableDoctorChecks(root, airtableConfig, checks) {
     checks.push({ status: "warn", code: "state-ignored", message: ".nemeda/state/ is not gitignored; run `nemeda-agent setup` to add it." });
   }
   if (airtableConfig.reconcileRepos?.length) {
-    let ghToken = "";
-    try {
-      ghToken = execFileSync("gh", ["auth", "token"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
-    } catch {
-      ghToken = "";
+    if (!executableAvailable("gh")) {
+      checks.push({
+        status: "fail",
+        code: "github-cli",
+        message: "gh is not installed; without it, PR status sync (open -> in progress, merged -> done) never runs, no matter how PRs are opened. Install it (https://github.com/cli/cli/releases) and run `gh auth login`."
+      });
+    } else {
+      let ghToken = "";
+      try {
+        ghToken = execFileSync("gh", ["auth", "token"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+      } catch {
+        ghToken = "";
+      }
+      checks.push(
+        ghToken
+          ? { status: "pass", code: "github-auth", message: "gh is authenticated; PR status sync can read open and merged PRs." }
+          : { status: "warn", code: "github-auth", message: "gh is installed but not authenticated; run `gh auth login` so PR status sync can run." }
+      );
     }
-    checks.push(
-      ghToken
-        ? { status: "pass", code: "github-auth", message: "gh is authenticated; PR reconciliation can query merged PRs." }
-        : { status: "warn", code: "github-auth", message: "gh is not authenticated; run `gh auth login` so merged PRs can be reconciled." }
-    );
   }
 }
 

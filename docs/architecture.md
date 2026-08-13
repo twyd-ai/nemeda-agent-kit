@@ -24,9 +24,14 @@ External systems: live and authorized
 ```
 
 The Airtable hooks are deliberately indirect: the agent only labels PR bodies
-with `Airtable: recXXX`; observation of `gh pr create` and of merged PRs moves
-task status. The agent never mutates client-visible state directly, and the
-hooks never block a tool (they always exit 0).
+with `Airtable: recXXX`. A session-start reconciler is the authoritative sync —
+it reads open and merged PRs directly from GitHub via `gh pr list` and moves
+task status accordingly, so it works regardless of how the PR was opened (web
+UI, another machine, `gh` CLI). Observing a local `gh pr create` Bash call is
+only a fast-path for immediate feedback on top of that; it cannot be the sole
+mechanism because it only sees PRs the agent itself creates from a Bash tool.
+The agent never mutates client-visible state directly, and the hooks never
+block a tool (they always exit 0).
 
 ## Portability boundary
 
