@@ -5,18 +5,24 @@ import {
   existsSync,
   lstatSync,
   mkdirSync,
+  readdirSync,
   readFileSync,
   realpathSync,
   writeFileSync
 } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { planDriveLinks } from "./drive.mjs";
+import { ENV_LOCAL_NAME, loadEnvLocal } from "./env.mjs";
 
 export const CONFIG_RELATIVE_PATH = path.join(".nemeda", "agent-kit.json");
 export const CONFIG_SCHEMA_VERSION = 1;
 
 const MAX_INSTRUCTION_BYTES = 64 * 1024;
-const SECRET_PATH_PATTERN = /(^|\/)(\.env(?:\.|$)|.*(?:secret|credential|token|private[-_]?key).*)/i;
+// Word-boundary matching so "docs/tokenization.md" passes while
+// "api-tokens.md" or ".env.local" stay blocked.
+const SECRET_PATH_PATTERN = /(^|\/)\.env(\.|$)|(^|[^a-z0-9])(secrets?|credentials?|tokens?|private[-_]?keys?)(?![a-z0-9])/i;
+const AIRTABLE_ID_PATTERNS = { baseId: /^app[a-zA-Z0-9]{14}$/, tableId: /^tbl[a-zA-Z0-9]{14}$/, recordId: /^rec[a-zA-Z0-9]{14}$/ };
 const PLUGIN_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 
 function isObject(value) {
@@ -102,7 +108,10 @@ function validateRepository(repository, field, issues, requirePath = false) {
     issues.push({ level: "error", code: "missing-repository", message: `${field} must be an object.` });
     return;
   }
-  validateAllowedKeys(repository, requirePath ? ["id", "path", "role", "profiles"] : ["id", "role", "profiles"], field, issues);
+  const allowedKeys = requirePath
+    ? ["id", "path", "role", "profiles", "remote", "branch"]
+    : ["id", "role", "profiles"];
+  validateAllowedKeys(repository, allowedKeys, field, issues);
   for (const key of ["id", "role"]) {
     if (typeof repository[key] !== "string" || !repository[key].trim()) {
       issues.push({ level: "error", code: "invalid-repository", message: `${field}.${key} must be a non-empty string.` });
@@ -111,7 +120,103 @@ function validateRepository(repository, field, issues, requirePath = false) {
   if (requirePath && (typeof repository.path !== "string" || !repository.path.trim())) {
     issues.push({ level: "error", code: "invalid-repository", message: `${field}.path must be a non-empty string.` });
   }
+  for (const key of ["remote", "branch"]) {
+    if (repository[key] !== undefined && (typeof repository[key] !== "string" || !repository[key].trim())) {
+      issues.push({ level: "error", code: "invalid-repository", message: `${field}.${key} must be a non-empty string when present.` });
+    }
+  }
   validateStringArray(repository.profiles, `${field}.profiles`, issues);
+}
+
+function isRelativeInsidePath(value) {
+  if (typeof value !== "string" || !value.trim() || path.isAbsolute(value)) return false;
+  return !value.replaceAll("\\", "/").split("/").includes("..");
+}
+
+function validateDrive(drive, issues) {
+  if (!isObject(drive)) {
+    issues.push({ level: "error", code: "invalid-drive", message: "drive must be an object." });
+    return;
+  }
+  validateAllowedKeys(drive, ["sharedDrive", "links"], "drive", issues);
+  if (typeof drive.sharedDrive !== "string" || !drive.sharedDrive.trim()) {
+    issues.push({ level: "error", code: "invalid-drive", message: "drive.sharedDrive must be a non-empty string." });
+  }
+  if (!isObject(drive.links) || Object.keys(drive.links).length === 0) {
+    issues.push({ level: "error", code: "invalid-drive", message: "drive.links must map workspace paths to shared-drive folders." });
+    return;
+  }
+  for (const [linkPath, drivePath] of Object.entries(drive.links)) {
+    if (!isRelativeInsidePath(linkPath) || typeof drivePath !== "string" || !isRelativeInsidePath(drivePath)) {
+      issues.push({ level: "error", code: "invalid-drive-link", message: `drive.links["${linkPath}"] must map a relative workspace path to a relative shared-drive path.` });
+    }
+  }
+}
+
+function validateAirtableId(value, field, kind, issues, required = true) {
+  if (value === undefined) {
+    if (required) issues.push({ level: "error", code: "invalid-airtable", message: `${field} is required.` });
+    return;
+  }
+  if (typeof value !== "string" || !AIRTABLE_ID_PATTERNS[kind].test(value)) {
+    issues.push({ level: "error", code: "invalid-airtable", message: `${field} must match ${AIRTABLE_ID_PATTERNS[kind]}.` });
+  }
+}
+
+function validateAirtable(airtable, issues) {
+  if (!isObject(airtable)) {
+    issues.push({ level: "error", code: "invalid-airtable", message: "airtable must be an object." });
+    return;
+  }
+  validateAllowedKeys(airtable, ["baseId", "tasks", "knowledgeLog", "reconcileRepos", "lookbackDays"], "airtable", issues);
+  validateAirtableId(airtable.baseId, "airtable.baseId", "baseId", issues);
+  if (airtable.tasks !== undefined) {
+    if (!isObject(airtable.tasks)) {
+      issues.push({ level: "error", code: "invalid-airtable", message: "airtable.tasks must be an object." });
+    } else {
+      validateAllowedKeys(airtable.tasks, ["tableId", "statusField", "notesField", "statusInProgress", "statusDone"], "airtable.tasks", issues);
+      validateAirtableId(airtable.tasks.tableId, "airtable.tasks.tableId", "tableId", issues);
+      for (const key of ["statusField", "notesField", "statusInProgress", "statusDone"]) {
+        if (typeof airtable.tasks[key] !== "string" || !airtable.tasks[key].trim()) {
+          issues.push({ level: "error", code: "invalid-airtable", message: `airtable.tasks.${key} must be a non-empty string.` });
+        }
+      }
+    }
+  }
+  if (airtable.knowledgeLog !== undefined) {
+    if (!isObject(airtable.knowledgeLog)) {
+      issues.push({ level: "error", code: "invalid-airtable", message: "airtable.knowledgeLog must be an object." });
+    } else {
+      validateAllowedKeys(airtable.knowledgeLog, ["baseId", "tableId", "people"], "airtable.knowledgeLog", issues);
+      // Some teams keep the Knowledge Log in a separate (internal) base.
+      validateAirtableId(airtable.knowledgeLog.baseId, "airtable.knowledgeLog.baseId", "baseId", issues, false);
+      validateAirtableId(airtable.knowledgeLog.tableId, "airtable.knowledgeLog.tableId", "tableId", issues);
+      if (airtable.knowledgeLog.people !== undefined) {
+        if (!isObject(airtable.knowledgeLog.people)) {
+          issues.push({ level: "error", code: "invalid-airtable", message: "airtable.knowledgeLog.people must map emails to Airtable record ids." });
+        } else {
+          for (const [email, recordId] of Object.entries(airtable.knowledgeLog.people)) {
+            if (!email.includes("@") || typeof recordId !== "string" || !AIRTABLE_ID_PATTERNS.recordId.test(recordId)) {
+              issues.push({ level: "error", code: "invalid-airtable", message: `airtable.knowledgeLog.people["${email}"] must map an email to a rec… id.` });
+            }
+          }
+        }
+      }
+    }
+  }
+  if (airtable.reconcileRepos !== undefined) {
+    validateStringArray(airtable.reconcileRepos, "airtable.reconcileRepos", issues);
+    if (Array.isArray(airtable.reconcileRepos)) {
+      airtable.reconcileRepos.forEach((repo, index) => {
+        if (typeof repo === "string" && !/^[\w.-]+\/[\w.-]+$/.test(repo)) {
+          issues.push({ level: "error", code: "invalid-airtable", message: `airtable.reconcileRepos[${index}] must look like owner/repo.` });
+        }
+      });
+    }
+  }
+  if (airtable.lookbackDays !== undefined && (!Number.isInteger(airtable.lookbackDays) || airtable.lookbackDays < 1 || airtable.lookbackDays > 365)) {
+    issues.push({ level: "error", code: "invalid-airtable", message: "airtable.lookbackDays must be an integer between 1 and 365." });
+  }
 }
 
 export function validateConfig(config) {
@@ -119,7 +224,7 @@ export function validateConfig(config) {
   if (!isObject(config)) {
     return [{ level: "error", code: "invalid-root", message: "Configuration must be a JSON object." }];
   }
-  validateAllowedKeys(config, ["schemaVersion", "project", "repository", "workspace", "context", "tools", "policies"], "configuration", issues);
+  validateAllowedKeys(config, ["schemaVersion", "project", "repository", "workspace", "context", "tools", "policies", "drive", "airtable"], "configuration", issues);
   if (config.schemaVersion !== CONFIG_SCHEMA_VERSION) {
     issues.push({
       level: "error",
@@ -170,6 +275,8 @@ export function validateConfig(config) {
       }
     }
   }
+  if (config.drive !== undefined) validateDrive(config.drive, issues);
+  if (config.airtable !== undefined) validateAirtable(config.airtable, issues);
   if (!isObject(config.context)) {
     issues.push({ level: "error", code: "missing-context", message: "context must be an object." });
   } else {
@@ -335,9 +442,12 @@ export function workspaceDoctor(start = defaultWorkspaceDirectory()) {
     if (hasAgents && hasClaude && !compatibilityFileIsThin(context.root)) {
       checks.push({ status: "warn", code: "instruction-drift", message: "AGENTS.md and CLAUDE.md both contain substantial instructions and may drift." });
     }
+    const declaredLinks = new Set(Object.keys(context.config?.drive?.links || {}));
     for (const skillPath of [path.join(context.root, ".agents", "skills"), path.join(context.root, ".claude", "skills")]) {
+      const relative = path.relative(context.root, skillPath).replaceAll(path.sep, "/");
+      if (declaredLinks.has(relative)) continue; // intentional Drive link, checked below
       if (existsSync(skillPath) && lstatSync(skillPath).isSymbolicLink()) {
-        checks.push({ status: "warn", code: "symlinked-skills", message: `${path.relative(context.root, skillPath)} is symlinked; prefer plugin distribution.` });
+        checks.push({ status: "warn", code: "symlinked-skills", message: `${relative} is symlinked; prefer plugin distribution.` });
       }
     }
     if (existsSync(path.join(context.root, ".mcp.json")) && existsSync(path.join(context.root, ".codex", "config.toml"))) {
@@ -364,7 +474,101 @@ export function workspaceDoctor(start = defaultWorkspaceDirectory()) {
       checks.push({ status: "warn", code: `tool-${tool}`, message: `Required connector ${tool} cannot be verified from the local shell.` });
     }
   }
+  if (context.root && context.config) {
+    if (context.config.drive) driveDoctorChecks(context.root, context.config.drive, checks);
+    if (context.config.workspace?.repositories) repositoryDoctorChecks(context.root, context.config.workspace.repositories, checks);
+    if (context.config.airtable) airtableDoctorChecks(context.root, context.config.airtable, checks);
+  }
   return { root: context.root, mode: context.mode, checks };
+}
+
+function gitIgnores(root, target) {
+  try {
+    execFileSync("git", ["check-ignore", "-q", target], { cwd: root, stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function driveDoctorChecks(root, driveConfig, checks) {
+  const plan = planDriveLinks(root, driveConfig);
+  if (plan.error) {
+    checks.push({ status: "fail", code: "drive-mount", message: plan.error });
+    return;
+  }
+  checks.push({ status: "pass", code: "drive-mount", message: `Shared drive "${driveConfig.sharedDrive}" found at ${plan.drivePath}.` });
+  for (const link of plan.links) {
+    let stat = null;
+    try {
+      stat = lstatSync(link.linkPath);
+    } catch {
+      stat = null;
+    }
+    if (!stat) {
+      checks.push({ status: "fail", code: "drive-link", message: `${link.relativeLinkPath} is missing; run \`nemeda-agent setup\`.` });
+    } else if (!stat.isSymbolicLink()) {
+      checks.push({ status: "warn", code: "drive-link", message: `${link.relativeLinkPath} exists but is not a symlink to Drive.` });
+    } else if (!existsSync(link.linkPath)) {
+      checks.push({ status: "fail", code: "drive-link", message: `${link.relativeLinkPath} is a broken symlink; is Google Drive for desktop running and streaming?` });
+    } else if (readdirSync(link.linkPath).filter((name) => !name.startsWith(".")).length === 0) {
+      checks.push({ status: "warn", code: "drive-link", message: `${link.relativeLinkPath} resolves but is empty; Drive may be mounted without content yet.` });
+    } else {
+      checks.push({ status: "pass", code: "drive-link", message: `${link.relativeLinkPath} resolves to Drive content.` });
+    }
+  }
+}
+
+function repositoryDoctorChecks(root, repositories, checks) {
+  for (const repository of repositories) {
+    const repoPath = path.join(root, repository.path);
+    if (existsSync(path.join(repoPath, ".git"))) {
+      checks.push({ status: "pass", code: "workspace-repository", message: `${repository.path}/ is cloned.` });
+    } else {
+      checks.push({
+        status: "warn",
+        code: "workspace-repository",
+        message: `${repository.path}/ (${repository.id}) is not cloned yet; run \`nemeda-agent setup\`${repository.remote ? "" : " or clone it by hand (no remote configured)"}.`
+      });
+    }
+  }
+}
+
+function airtableDoctorChecks(root, airtableConfig, checks) {
+  const envPath = path.join(root, ENV_LOCAL_NAME);
+  if (!existsSync(envPath)) {
+    checks.push({ status: "warn", code: "airtable-env", message: `${ENV_LOCAL_NAME} is missing; run \`nemeda-agent setup\` and fill AIRTABLE_API_KEY.` });
+  } else {
+    const scratch = {};
+    loadEnvLocal(root, scratch);
+    checks.push(
+      scratch.AIRTABLE_API_KEY
+        ? { status: "pass", code: "airtable-env", message: `${ENV_LOCAL_NAME} provides AIRTABLE_API_KEY.` }
+        : { status: "warn", code: "airtable-env", message: `${ENV_LOCAL_NAME} exists but AIRTABLE_API_KEY is empty; the Airtable hooks will skip silently.` }
+    );
+    if (!gitIgnores(root, envPath)) {
+      checks.push({ status: "fail", code: "airtable-env-ignored", message: `${ENV_LOCAL_NAME} is NOT gitignored; add it to .gitignore before committing anything.` });
+    }
+  }
+  // Probe with a file inside the directory: trailing-slash gitignore patterns
+  // only match paths git can tell are directories, which fails before the
+  // state directory first exists.
+  if (!gitIgnores(root, path.join(root, ".nemeda", "state", "probe"))) {
+    checks.push({ status: "warn", code: "state-ignored", message: ".nemeda/state/ is not gitignored; run `nemeda-agent setup` to add it." });
+  }
+  if (airtableConfig.reconcileRepos?.length) {
+    let ghToken = "";
+    try {
+      ghToken = execFileSync("gh", ["auth", "token"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+    } catch {
+      ghToken = "";
+    }
+    checks.push(
+      ghToken
+        ? { status: "pass", code: "github-auth", message: "gh is authenticated; PR reconciliation can query merged PRs." }
+        : { status: "warn", code: "github-auth", message: "gh is not authenticated; run `gh auth login` so merged PRs can be reconciled." }
+    );
+  }
 }
 
 function slugify(value) {
@@ -398,8 +602,24 @@ function resolveGitRoot(start) {
   return runGit(candidate, ["rev-parse", "--show-toplevel"]) || candidate;
 }
 
+function scanWorkspaceRepositories(root) {
+  const repositories = [];
+  for (const entry of readdirSync(root, { withFileTypes: true })) {
+    if (!entry.isDirectory() || entry.name.startsWith(".")) continue;
+    const candidate = path.join(root, entry.name);
+    if (!existsSync(path.join(candidate, ".git"))) continue;
+    repositories.push({
+      id: slugify(entry.name),
+      path: entry.name,
+      role: "repository",
+      profiles: detectProfiles(candidate)
+    });
+  }
+  return repositories;
+}
+
 export function initializeWorkspace(start = defaultWorkspaceDirectory(), options = {}) {
-  const root = resolveGitRoot(start);
+  const root = options.workspace ? asStartDirectory(start) : resolveGitRoot(start);
   const configPath = path.join(root, CONFIG_RELATIVE_PATH);
   const agentsPath = path.join(root, "AGENTS.md");
   if (existsSync(configPath)) throw new Error(`${CONFIG_RELATIVE_PATH} already exists; no files were changed.`);
@@ -408,10 +628,20 @@ export function initializeWorkspace(start = defaultWorkspaceDirectory(), options
   const projectId = slugify(options.projectId || inferredId);
   const projectName = options.projectName || path.basename(root).replaceAll(/[-_]+/g, " ");
   const profiles = options.profiles?.length ? options.profiles : detectProfiles(root);
+  let scope;
+  if (options.workspace) {
+    const repositories = scanWorkspaceRepositories(root);
+    if (repositories.length === 0) {
+      throw new Error("No nested Git repositories found; run init without --workspace or clone the code repositories first.");
+    }
+    scope = { workspace: { repositories } };
+  } else {
+    scope = { repository: { id: projectId, role: options.role || "repository", profiles } };
+  }
   const config = {
     schemaVersion: CONFIG_SCHEMA_VERSION,
     project: { id: projectId, name: projectName },
-    repository: { id: inferredId, role: options.role || "repository", profiles },
+    ...scope,
     context: { instructions: ["AGENTS.md"], documents: [] },
     tools: { required: ["git"], optional: ["github"] },
     policies: { protectSecrets: true }
@@ -443,6 +673,18 @@ export function formatContextForHook(context) {
     lines.push(`Profiles: ${context.config.repository.profiles.join(", ") || "none"}`);
   } else if (context.config.workspace) {
     lines.push(`Workspace repositories: ${context.config.workspace.repositories.map((repo) => `${repo.path} (${repo.role})`).join(", ")}`);
+  }
+  if (context.config.drive) {
+    const links = Object.entries(context.config.drive.links || {})
+      .map(([linkPath, drivePath]) => `${linkPath} -> ${context.config.drive.sharedDrive}/${drivePath}`)
+      .join(", ");
+    lines.push(`Shared Drive links (run \`nemeda-agent setup\` if missing): ${links}`);
+  }
+  if (context.config.airtable?.tasks) {
+    lines.push(`Airtable tasks: base ${context.config.airtable.baseId}, table ${context.config.airtable.tasks.tableId}.`);
+    lines.push("Link every PR to its task by adding a line `Airtable: recXXXXXXXXXXXXXX` to the PR body; hooks move the task to " +
+      `"${context.config.airtable.tasks.statusInProgress}" on PR creation and "${context.config.airtable.tasks.statusDone}" after merge. ` +
+      "Never change task status directly, and ask the user before creating new records in client-visible tables.");
   }
   if (context.issues.length > 0) {
     lines.push("Configuration issues:");

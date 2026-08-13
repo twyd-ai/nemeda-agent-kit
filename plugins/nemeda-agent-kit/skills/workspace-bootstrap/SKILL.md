@@ -16,7 +16,12 @@ description: Initialize Nemeda Agent Kit safely in a repository by creating a mi
    production architecture.
 5. Move project-specific rules into `AGENTS.md`; keep structured identity, profiles,
    context paths, and tool requirements in `.nemeda/agent-kit.json`.
-6. Run `nemeda-agent doctor` and report warnings before proposing publication.
+6. For shared workspaces, extend the configuration with `drive` (shared-drive name
+   and symlink map), `workspace.repositories[].remote`, and `airtable` (base, tables,
+   status vocabulary) — see `docs/configuration.md` — then run `nemeda-agent setup`
+   to create symlinks, clone repositories, and write the `.env.local` template. Ask
+   the user for the shared-drive name and Airtable ids; never guess them.
+7. Run `nemeda-agent doctor` and report warnings before proposing publication.
 
 Do not put tokens, passwords, customer records, or private document contents into
 the configuration file. Connector names and non-secret resource identifiers may be

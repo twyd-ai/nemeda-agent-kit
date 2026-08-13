@@ -10,15 +10,46 @@
         "id": "scharlab-backend",
         "path": "backend",
         "role": "backend",
-        "profiles": ["python", "fastapi", "postgresql"]
+        "profiles": ["python", "fastapi", "postgresql"],
+        "remote": "https://github.com/twyd-ai/scharlab-backend.git"
       },
       {
         "id": "scharlab-frontend",
         "path": "frontend",
         "role": "frontend",
-        "profiles": ["typescript", "nextjs", "react"]
+        "profiles": ["typescript", "nextjs", "react"],
+        "remote": "https://github.com/twyd-ai/scharlab-frontend.git"
       }
     ]
+  },
+  "drive": {
+    "sharedDrive": "Scharlab-Workspace",
+    "links": {
+      "docs": "docs",
+      "config": "config",
+      ".claude/skills": "skills",
+      ".claude/commands": "commands"
+    }
+  },
+  "airtable": {
+    "baseId": "app4Jhz8LUVTGHp34",
+    "tasks": {
+      "tableId": "tblRcAuWWIrsyvxZz",
+      "statusField": "Status",
+      "notesField": "Notas / Riesgos",
+      "statusInProgress": "En progreso",
+      "statusDone": "Hecho"
+    },
+    "knowledgeLog": {
+      "tableId": "tblqA7gGHtxCptlKW",
+      "people": {
+        "marc.noguera@nemeda.io": "recuDGnR9u9jqP5Vq",
+        "miquel@nemeda.io": "reccN4siQUOlHwvbH",
+        "miguel.monllau.monfort@gmail.com": "reccN4siQUOlHwvbH"
+      }
+    },
+    "reconcileRepos": ["twyd-ai/scharlab-backend", "twyd-ai/scharlab-frontend"],
+    "lookbackDays": 21
   },
   "context": {
     "instructions": ["AGENTS.md"],

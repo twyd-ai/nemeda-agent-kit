@@ -4,9 +4,8 @@
       "type": "stdio",
       "command": "node",
       "args": [
-        "./scripts/mcp-server.mjs"
-      ],
-      "cwd": "."
+        "${CLAUDE_PLUGIN_ROOT}/scripts/mcp-server.mjs"
+      ]
     }
   }
 }
