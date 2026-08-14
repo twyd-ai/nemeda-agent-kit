@@ -1,7 +1,7 @@
 {
   "name": "nemeda-agent-kit",
   "displayName": "Nemeda Agent Kit",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "Portable methodology, tools, and repository context for AI coding agents.",
   "author": {
     "name": "Marc Noguera",
@@ -10,6 +10,5 @@
   "homepage": "https://github.com/marcnaa/nemeda-agent-kit",
   "repository": "https://github.com/marcnaa/nemeda-agent-kit",
   "keywords": ["agents", "codex", "claude", "mcp", "workspace"],
-  "skills": "./skills/",
-  "mcpServers": "./.claude-plugin/mcp.json"
+  "skills": "./skills/"
 }

@@ -35,6 +35,9 @@ test("host manifests declare hooks only where the host requires them", () => {
 
   assert.equal(codex.hooks, "./hooks/hooks.json");
   assert.equal(claude.hooks, undefined, "Claude auto-loads hooks/hooks.json and must not declare it twice");
+  assert.equal(codex.mcpServers, "./mcp.json");
+  assert.equal(claude.mcpServers, undefined, "Claude auto-loads .mcp.json and must not declare the MCP twice");
+  assert.equal(existsSync(path.join(pluginRoot, ".claude-plugin", "mcp.json")), false);
 });
 
 test("hosted plugin has no implicit executable directory", () => {
@@ -80,7 +83,6 @@ test("manifest and hook references point at existing files", () => {
   const manifestPaths = [
     ".claude-plugin/plugin.json",
     ".codex-plugin/plugin.json",
-    ".claude-plugin/mcp.json",
     ".mcp.json",
     "mcp.json",
     "hooks/hooks.json"
