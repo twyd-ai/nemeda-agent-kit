@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
@@ -35,6 +35,25 @@ test("host manifests declare hooks only where the host requires them", () => {
 
   assert.equal(codex.hooks, "./hooks/hooks.json");
   assert.equal(claude.hooks, undefined, "Claude auto-loads hooks/hooks.json and must not declare it twice");
+});
+
+test("hosted plugin has no implicit executable directory", () => {
+  const packageManifest = readJson(path.join(pluginRoot, "package.json"));
+
+  const binDirectory = path.join(pluginRoot, "bin");
+  assert.equal(
+    existsSync(binDirectory) && readdirSync(binDirectory).length > 0,
+    false,
+    "Claude Desktop rejects files in a top-level bin/ directory"
+  );
+  assert.deepEqual(packageManifest.bin, {
+    "nemeda-agent": "./scripts/cli.mjs",
+    "nemeda-agent-mcp": "./scripts/mcp-server.mjs"
+  });
+  for (const entrypoint of Object.values(packageManifest.bin)) {
+    const source = readFileSync(path.join(pluginRoot, entrypoint), "utf8");
+    assert.equal(source.startsWith("#!/usr/bin/env node\n"), true, `${entrypoint} must remain directly executable`);
+  }
 });
 
 test("marketplaces resolve to the same plugin directory", () => {

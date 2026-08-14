@@ -145,7 +145,6 @@ See [configuration.md](docs/configuration.md) for the contract and
 │   ├── hooks/hooks.json                    # Session context + Airtable hooks
 │   ├── schemas/                            # Per-repository contract
 │   ├── scripts/                            # CLI, MCP server, hook scripts, lib/
-│   ├── bin/                                # nemeda-agent, nemeda-agent-mcp
 │   └── tests/
 ├── examples/
 └── docs/
