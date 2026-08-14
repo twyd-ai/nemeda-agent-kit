@@ -17,12 +17,24 @@ test("portable and host manifests share the same identity", () => {
   const portable = readJson(path.join(pluginRoot, "plugin.json"));
   const codex = readJson(path.join(pluginRoot, ".codex-plugin", "plugin.json"));
   const claude = readJson(path.join(pluginRoot, ".claude-plugin", "plugin.json"));
+  const packageManifest = readJson(path.join(pluginRoot, "package.json"));
+  const claudeMarketplace = readJson(path.join(repositoryRoot, ".claude-plugin", "marketplace.json"));
 
   assert.equal(portable.name, "nemeda-agent-kit");
   assert.equal(codex.name, portable.name);
   assert.equal(claude.name, portable.name);
   assert.equal(codex.version, portable.version);
   assert.equal(claude.version, portable.version);
+  assert.equal(packageManifest.version, portable.version);
+  assert.equal(claudeMarketplace.plugins[0].version, portable.version);
+});
+
+test("host manifests declare hooks only where the host requires them", () => {
+  const codex = readJson(path.join(pluginRoot, ".codex-plugin", "plugin.json"));
+  const claude = readJson(path.join(pluginRoot, ".claude-plugin", "plugin.json"));
+
+  assert.equal(codex.hooks, "./hooks/hooks.json");
+  assert.equal(claude.hooks, undefined, "Claude auto-loads hooks/hooks.json and must not declare it twice");
 });
 
 test("marketplaces resolve to the same plugin directory", () => {

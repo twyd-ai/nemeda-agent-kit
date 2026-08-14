@@ -64,6 +64,21 @@ claude plugin install nemeda-agent-kit@nemeda-agent-kit-private
 
 Run `/reload-plugins` or start a new session.
 
+### Claude Desktop organization marketplace
+
+Claude Desktop organization marketplaces use a managed GitHub sync rather than
+the local Git credentials used by Claude Code. The repository must be private or
+internal, and the Claude GitHub App must have access to it.
+
+In **Organization settings → Plugins → Add plugin → GitHub**, enter
+`marcnaa/nemeda-agent-kit` in `owner/repo` form. Manual sync uses the GitHub App
+installation token. Automatic sync additionally requires repository admin access
+and the App's Webhooks read/write permission.
+
+Keep plugin sources relative to this repository, as in
+`./plugins/nemeda-agent-kit`; managed sync cannot fetch plugin code from a separate
+private repository.
+
 ### Local development install
 
 The marketplace installs are separate clones of the GitHub repository: edits in
