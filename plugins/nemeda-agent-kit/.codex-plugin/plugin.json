@@ -1,6 +1,6 @@
 {
   "name": "nemeda-agent-kit",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Portable methodology, tools, and repository context for AI coding agents.",
   "author": {
     "name": "Marc Noguera",
