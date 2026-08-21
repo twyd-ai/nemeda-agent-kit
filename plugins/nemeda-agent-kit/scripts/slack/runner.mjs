@@ -13,6 +13,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, appendFileSync } from "node:fs";
 import path from "node:path";
 import { loadEnvLocal } from "../lib/env.mjs";
+import { resolveActiveServer } from "../lib/slack-servers.mjs";
 import {
   buildBackendCommand,
   buildRoutes,
@@ -173,8 +174,10 @@ class Runner {
     loadEnvLocal(homeDirectory(this.environment), this.environment);
     this.botToken = this.environment.SLACK_BOT_TOKEN || "";
     this.appToken = this.environment.SLACK_APP_TOKEN || "";
-    this.relayUrl = (this.environment.NEMEDA_RELAY_URL || "").replace(/\/+$/, "");
-    this.relayToken = this.environment.NEMEDA_RELAY_TOKEN || "";
+    const server = resolveActiveServer(this.environment);
+    this.relayUrl = server?.url || "";
+    this.relayToken = server?.token || "";
+    this.relayName = server?.name || "";
     this.relayMode = Boolean(this.relayUrl && this.relayToken);
     const registry = loadRegistry(this.environment);
     if (registry.error) throw new Error(registry.error);
@@ -542,7 +545,7 @@ class Runner {
   async start() {
     this.load();
     if (this.relayMode) {
-      log(`relay mode: ${this.relayUrl}`);
+      log(`relay mode: ${this.relayName} -> ${this.relayUrl}`);
       let backoff = RECONNECT_BASE_MS;
       let registered = false;
       for (;;) {

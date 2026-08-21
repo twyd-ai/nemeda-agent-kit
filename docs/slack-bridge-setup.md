@@ -203,6 +203,28 @@ optional here: the relay already knows who you are.
 To unpair, send `desvincular` by DM (revokes the token on the relay) or run
 `nemeda-agent slack leave` (forgets it locally).
 
+## Switching relays
+
+A machine can be paired with several relays — a production one and a local one
+you develop against — and switch between them without re-pairing:
+
+```bash
+nemeda-agent slack join http://localhost:8787 --as dev   # pair and name it
+nemeda-agent slack server                                # list, or pick interactively
+nemeda-agent slack server prod                           # switch
+nemeda-agent slack server --forget dev
+```
+
+Profiles live in `~/.nemeda/servers.json` (owner-only: it holds runner tokens).
+A setup that predates profiles is adopted automatically as `default`, so
+nothing breaks. Restart the runner after switching.
+
+**Switching your own runner is safe for everyone else. Running a second relay
+against the same Slack app is not.** Both relays would hold a Socket Mode
+connection and Slack would split events between them, so half the team's
+questions would hit your development relay. Give a development relay its own
+Slack app — the manifest is the same, and the app is free to create.
+
 ## For whoever runs the relay
 
 The relay needs the Slack app's two tokens in
