@@ -235,6 +235,16 @@ as sensitive. It cannot touch a repository, run anything on a laptop, or manage
 the workspace: runners stay read-only, and the relay refuses any Slack method
 outside an eight-entry whitelist.
 
+### Hosting it for real
+
+A laptop is fine for trying this out, but the relay is shared infrastructure:
+while it is down, the bot is down for everyone. See
+[deploy/relay/README.md](../deploy/relay/README.md) for an Azure App Service
+recipe. Two constraints matter wherever it runs: it must be a **single
+instance** (two would split the Slack connection and the in-memory queues), and
+`NEMEDA_RELAY_HOME` must be persistent (losing `pairings.json` means everyone
+re-runs `slack join`).
+
 ### Transport
 
 Runners reach the relay over plain HTTPS — `GET /runner/poll` long polls for up
