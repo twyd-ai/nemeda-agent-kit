@@ -91,7 +91,7 @@ export function resolveActiveServer(environment = process.env, name = "") {
     const chosen = state.servers[name];
     if (!chosen?.url || !chosen?.token) {
       const known = Object.keys(state.servers).join(", ") || "ninguno";
-      throw new Error(`No conozco el servidor "${name}". Tengo: ${known}.`);
+      throw new Error(`Unknown server "${name}". Known: ${known}.`);
     }
     return { name, url: normalizeUrl(chosen.url), token: chosen.token };
   }

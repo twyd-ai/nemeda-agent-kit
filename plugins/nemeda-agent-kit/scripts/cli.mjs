@@ -101,13 +101,13 @@ async function promptForServer(state) {
     console.log(` ${mark} ${index + 1}) ${server.name.padEnd(14)} ${server.url}`);
   }
   if (!process.stdin.isTTY) {
-    console.log("\nElige uno con: nemeda-agent slack server <nombre>");
+    console.log("\nPick one with: nemeda-agent slack server <name>");
     return null;
   }
   const { createInterface } = await import("node:readline/promises");
   const rl = createInterface({ input: process.stdin, output: process.stdout });
   try {
-    const answer = (await rl.question("\n¿A cuál te conectas? (número o nombre, Enter para dejarlo) ")).trim();
+    const answer = (await rl.question("\nConnect to which one? (number or name, Enter to keep current) ")).trim();
     if (!answer) return null;
     const byIndex = state.servers[Number(answer) - 1];
     return byIndex ? byIndex.name : answer;
@@ -154,25 +154,25 @@ async function runSlack(options) {
   }
   if (subcommand === "join") {
     const result = await joinRelay(options.question, options.as);
-    console.log(`Vinculado como ${result.userName} (${result.userId}) en "${result.server}". Guardado en ${result.envPath}.`);
+    console.log(`Linked as ${result.userName} (${result.userId}) on "${result.server}". Saved to ${result.envPath}.`);
     for (const step of result.nextSteps) console.log(`  - ${step}`);
     return 0;
   }
   if (subcommand === "server") {
     if (options.forget) {
-      console.log(`Olvidado: ${forgetServer(options.forget).removed}.`);
+      console.log(`Forgotten: ${forgetServer(options.forget).removed}.`);
       return 0;
     }
     const state = listServers();
     if (state.servers.length === 0) {
-      console.log("No hay ningún relay configurado. Añade uno con `nemeda-agent slack join <url> --as <nombre>`.");
+      console.log("No relay configured. Add one with `nemeda-agent slack join <url> --as <name>`.");
       return 1;
     }
     const target = options.question || (await promptForServer(state));
     if (!target) return 0;
     const chosen = useServer(target);
-    console.log(`Ahora este equipo usa "${chosen.active}" (${chosen.url}).`);
-    console.log("  - Reinicia el runner para aplicarlo: launchctl kickstart -k gui/$(id -u)/io.nemeda.agent-kit.slack");
+    console.log(`This machine now uses "${chosen.active}" (${chosen.url}).`);
+    console.log("  - Restart the runner to apply it: launchctl kickstart -k gui/$(id -u)/io.nemeda.agent-kit.slack");
     return 0;
   }
   if (subcommand === "leave") {

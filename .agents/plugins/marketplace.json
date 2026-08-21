@@ -1,7 +1,7 @@
 {
-  "name": "nemeda-agent-kit-private",
+  "name": "nemeda-agent-kit",
   "interface": {
-    "displayName": "Nemeda Agent Kit Private"
+    "displayName": "Nemeda Agent Kit"
   },
   "plugins": [
     {

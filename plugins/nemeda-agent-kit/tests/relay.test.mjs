@@ -21,8 +21,8 @@ test("pairing codes and tokens have the expected shapes", () => {
 test("parsePairingText accepts vincular/link and rejects noise", () => {
   assert.equal(parsePairingText("vincular AZUL-7291"), "AZUL-7291");
   assert.equal(parsePairingText("  link rojo-0042 "), "ROJO-0042");
-  assert.equal(parsePairingText("vincular mi agente"), null);
-  assert.equal(parsePairingText("¿cómo vinculo AZUL-7291?"), null);
+  assert.equal(parsePairingText("link my agent"), null);
+  assert.equal(parsePairingText("how do I link AZUL-7291?"), null);
   assert.equal(isUnlinkCommand("desvincular"), true);
   assert.equal(isUnlinkCommand("desvincular a Juan"), false);
 });

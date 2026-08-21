@@ -266,8 +266,8 @@ class Runner {
         channel: event.channel,
         thread_ts: decision.threadTs,
         text: this.projects.length
-          ? `Este canal no está enrutado a ningún repo. Los que llevo son: ${this.projects.map((project) => project.projectName).join(", ")}.`
-          : "Todavía no tengo ningún repo configurado."
+          ? `This channel is not routed to a repository. I cover: ${this.projects.map((project) => project.projectName).join(", ")}.`
+          : "No repositories are configured yet."
       });
       return;
     }
@@ -279,7 +279,7 @@ class Runner {
           channel: event.channel,
           user: event.user,
           thread_ts: decision.threadTs,
-          text: `Este bot es de <@${route.slack.owner}>. Menciona el tuyo y responderá con tu plan.`
+          text: `This agent belongs to <@${route.slack.owner}>. Mention your own and it will answer on your plan.`
         });
       }
       return;
@@ -357,7 +357,7 @@ class Runner {
 
     if (isPurgeCommand(stripMentions(event.text))) {
       if (this.isOwner(event.user)) await this.runPurge(event);
-      else await say("Borrar mensajes solo puede pedirlo el dueño del bot.");
+      else await say("Only the owner of this agent can ask it to delete messages.");
       return;
     }
 
@@ -369,11 +369,11 @@ class Runner {
     const menu = this.projects.map((project) => `\`${project.projectId}\``).join(", ");
 
     if (resolution.kind === "unknown-project") {
-      await say(`No llevo ningún proyecto llamado "${resolution.token}". Tengo: ${menu}.`);
+      await say(`I do not cover a project called "${resolution.token}". I have: ${menu}.`);
       return;
     }
     if (resolution.kind === "choose") {
-      await say(`¿Sobre qué proyecto? Tengo: ${menu}. Dime \`usa <proyecto>\` o empieza con \`<proyecto>: tu pregunta\`.`);
+      await say(`Which project? I have: ${menu}. Say \`use <project>\` or start with \`<project>: your question\`.`);
       return;
     }
 
@@ -381,7 +381,7 @@ class Runner {
     if (!this.isAllowed(route, event.user)) {
       audit({ kind: "deny", channel: event.channel, user: event.user, project: route.projectId }, this.environment);
       if (route.slack.onUnauthorized === "ephemeral") {
-        await say(`Este bot es de <@${route.slack.owner}>. Menciona el tuyo y responderá con tu plan.`);
+        await say(`This agent belongs to <@${route.slack.owner}>. Mention your own and it will answer on your plan.`);
       }
       return;
     }
@@ -391,7 +391,7 @@ class Runner {
       writeState(this.stateFile("dm"), this.dmProjects, this.environment);
     }
     if (resolution.kind === "switch") {
-      await say(`Hecho, ahora hablamos de *${route.projectName}*.`);
+      await say(`Done — now we are talking about *${route.projectName}*.`);
       return;
     }
 
@@ -415,7 +415,7 @@ class Runner {
       await this.try("chat.postMessage", {
         channel: event.channel,
         ...(decision.isDirectMessage ? {} : { thread_ts: decision.threadTs }),
-        text: `He llegado al límite de ${route.slack.maxQuestionsPerHour} preguntas por hora. Vuelve a intentarlo en ${limit.retryAfterMinutes} min.`
+        text: `That is my limit of ${route.slack.maxQuestionsPerHour} questions an hour. Try again in ${limit.retryAfterMinutes} min.`
       });
       return;
     }
@@ -443,7 +443,7 @@ class Runner {
       await this.try("chat.postMessage", {
         channel: event.channel,
         ...(decision.isDirectMessage ? {} : { thread_ts: decision.threadTs }),
-        text: `No he podido responder: ${result.error || "sin respuesta"}.`
+        text: `I could not answer: ${result.error || "no response"}.`
       });
     } else {
       for (const chunk of chunks) {
