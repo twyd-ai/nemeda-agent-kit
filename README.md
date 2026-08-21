@@ -17,7 +17,8 @@ project instructions stay in `AGENTS.md`.
   multi-repository work.
 - A read-only MCP server that exposes normalized workspace context and health
   checks.
-- A zero-dependency CLI: `nemeda-agent init`, `setup`, `context`, and `doctor`.
+- A zero-dependency CLI: `nemeda-agent init`, `setup`, `context`, `doctor`, and
+  `slack`.
 - **Shared-workspace assembly** (`nemeda-agent setup`): Google Drive symlinks
   (`docs/`, `config/`, `.claude/skills`, `.claude/commands`), declared code
   repository clones, an `.env.local` template, and the matching `.gitignore`
@@ -37,6 +38,14 @@ project instructions stay in `AGENTS.md`.
   Every hook is a fast no-op in repositories without an `airtable` section,
   never blocks the tool that triggered it, and requires `gh` to be installed
   and authenticated — `nemeda-agent doctor` checks both explicitly.
+- **A personal Slack bridge** (`nemeda-agent slack`): a Socket Mode runner that
+  answers questions about your repositories in Slack threads. No infrastructure
+  (the connection is outbound, so there is no server, URL, or tunnel), and every
+  answer is produced by the operator's own Codex or Claude subscription through
+  the local CLI. Each person runs their own Slack app, so a mention reaches only
+  their machine and only the owner and their declared guests are answered.
+  Read-only by construction, and `slack ask` replays the whole path locally so
+  the voice can be tuned before any Slack app exists.
 - Native manifests and marketplaces for Codex and Claude Code.
 - A portable Agent Plugins `plugin.json` + `mcp.json` core.
 - A versioned JSON Schema and sanitized Milence/Scharlab examples.
@@ -104,6 +113,8 @@ If the optional CLI binary is on `PATH`, the equivalent commands are:
 nemeda-agent init            # or: init --workspace  (scans nested git repos)
 nemeda-agent setup           # Drive symlinks, repo clones, .env.local, .gitignore
 nemeda-agent doctor          # config, Drive, Airtable, gh, and host diagnostics
+nemeda-agent slack init      # personal Slack bridge: registry + token file
+nemeda-agent slack doctor    # registry, routing, tokens, channel membership
 ```
 
 `setup` is idempotent and create-if-absent only: existing files, links, and
@@ -127,8 +138,10 @@ your-repo/
 └── AGENTS.md
 ```
 
-See [configuration.md](docs/configuration.md) for the contract and
-[architecture.md](docs/architecture.md) for the portability boundaries.
+See [configuration.md](docs/configuration.md) for the contract,
+[architecture.md](docs/architecture.md) for the portability boundaries, and
+[slack-bridge-setup.md](docs/slack-bridge-setup.md) for the step-by-step Slack
+bot setup.
 
 ## Repository layout
 
@@ -143,6 +156,7 @@ See [configuration.md](docs/configuration.md) for the contract and
 │   ├── .claude-plugin/plugin.json          # Claude adapter
 │   ├── skills/                             # Single source of methodology
 │   ├── hooks/hooks.json                    # Session context + Airtable hooks
+│   ├── slack/                              # App manifest + the Slack voice
 │   ├── schemas/                            # Per-repository contract
 │   ├── scripts/                            # CLI, MCP server, hook scripts, lib/
 │   └── tests/

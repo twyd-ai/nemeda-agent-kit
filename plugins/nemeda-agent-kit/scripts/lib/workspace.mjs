@@ -23,6 +23,7 @@ const MAX_INSTRUCTION_BYTES = 64 * 1024;
 // "api-tokens.md" or ".env.local" stay blocked.
 const SECRET_PATH_PATTERN = /(^|\/)\.env(\.|$)|(^|[^a-z0-9])(secrets?|credentials?|tokens?|private[-_]?keys?)(?![a-z0-9])/i;
 const AIRTABLE_ID_PATTERNS = { baseId: /^app[a-zA-Z0-9]{14}$/, tableId: /^tbl[a-zA-Z0-9]{14}$/, recordId: /^rec[a-zA-Z0-9]{14}$/ };
+const SLACK_ID_PATTERNS = { channel: /^[CGD][A-Z0-9]{6,}$/, user: /^[UW][A-Z0-9]{6,}$/ };
 const PLUGIN_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 
 function isObject(value) {
@@ -219,12 +220,64 @@ function validateAirtable(airtable, issues) {
   }
 }
 
+function validateSlackIds(value, field, kind, issues) {
+  validateStringArray(value, field, issues);
+  if (!Array.isArray(value)) return;
+  value.forEach((id, index) => {
+    if (typeof id === "string" && !SLACK_ID_PATTERNS[kind].test(id)) {
+      issues.push({ level: "error", code: "invalid-slack", message: `${field}[${index}] does not look like a Slack ${kind} id.` });
+    }
+  });
+}
+
+function validateSlack(slack, issues) {
+  if (!isObject(slack)) {
+    issues.push({ level: "error", code: "invalid-slack", message: "slack must be an object." });
+    return;
+  }
+  validateAllowedKeys(
+    slack,
+    ["channels", "owner", "guests", "backend", "model", "sourceRef", "maxQuestionsPerHour", "maxAnswerChars", "followThreads", "onUnauthorized", "timeoutSeconds"],
+    "slack",
+    issues
+  );
+  validateSlackIds(slack.channels, "slack.channels", "channel", issues);
+  if (Array.isArray(slack.channels) && slack.channels.length === 0) {
+    issues.push({ level: "error", code: "invalid-slack", message: "slack.channels must list at least one channel id." });
+  }
+  if (typeof slack.owner !== "string" || !SLACK_ID_PATTERNS.user.test(slack.owner)) {
+    issues.push({ level: "error", code: "invalid-slack", message: "slack.owner must be a Slack user id such as U01ABCDEF." });
+  }
+  if (slack.guests !== undefined) validateSlackIds(slack.guests, "slack.guests", "user", issues);
+  if (slack.backend !== undefined && !["claude", "codex"].includes(slack.backend)) {
+    issues.push({ level: "error", code: "invalid-slack", message: 'slack.backend must be "claude" or "codex".' });
+  }
+  if (slack.onUnauthorized !== undefined && !["silent", "ephemeral"].includes(slack.onUnauthorized)) {
+    issues.push({ level: "error", code: "invalid-slack", message: 'slack.onUnauthorized must be "silent" or "ephemeral".' });
+  }
+  if (slack.followThreads !== undefined && typeof slack.followThreads !== "boolean") {
+    issues.push({ level: "error", code: "invalid-slack", message: "slack.followThreads must be a boolean." });
+  }
+  for (const field of ["model", "sourceRef"]) {
+    if (slack[field] !== undefined && (typeof slack[field] !== "string" || !slack[field].trim())) {
+      issues.push({ level: "error", code: "invalid-slack", message: `slack.${field} must be a non-empty string.` });
+    }
+  }
+  const ranges = { maxQuestionsPerHour: [1, 500], maxAnswerChars: [200, 8000], timeoutSeconds: [30, 900] };
+  for (const [field, [min, max]] of Object.entries(ranges)) {
+    const value = slack[field];
+    if (value !== undefined && (!Number.isInteger(value) || value < min || value > max)) {
+      issues.push({ level: "error", code: "invalid-slack", message: `slack.${field} must be an integer between ${min} and ${max}.` });
+    }
+  }
+}
+
 export function validateConfig(config) {
   const issues = [];
   if (!isObject(config)) {
     return [{ level: "error", code: "invalid-root", message: "Configuration must be a JSON object." }];
   }
-  validateAllowedKeys(config, ["schemaVersion", "project", "repository", "workspace", "context", "tools", "policies", "drive", "airtable"], "configuration", issues);
+  validateAllowedKeys(config, ["schemaVersion", "project", "repository", "workspace", "context", "tools", "policies", "drive", "airtable", "slack"], "configuration", issues);
   if (config.schemaVersion !== CONFIG_SCHEMA_VERSION) {
     issues.push({
       level: "error",
@@ -277,6 +330,7 @@ export function validateConfig(config) {
   }
   if (config.drive !== undefined) validateDrive(config.drive, issues);
   if (config.airtable !== undefined) validateAirtable(config.airtable, issues);
+  if (config.slack !== undefined) validateSlack(config.slack, issues);
   if (!isObject(config.context)) {
     issues.push({ level: "error", code: "missing-context", message: "context must be an object." });
   } else {

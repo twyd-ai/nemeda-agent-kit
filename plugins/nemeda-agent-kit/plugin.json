@@ -1,7 +1,7 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "nemeda-agent-kit",
-  "version": "0.2.3",
+  "version": "0.3.0",
   "description": "Portable methodology, tools, and repository context for AI coding agents.",
   "author": {
     "name": "Marc Noguera",

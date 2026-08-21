@@ -7,7 +7,8 @@ Plugin: reusable and versioned
   ├── skills        methodology and repeatable workflows
   ├── MCP           read-only context and diagnostics
   ├── hooks         session context + parameterized Airtable automations
-  └── CLI           deterministic init, setup, and doctor
+  ├── slack         Socket Mode runner, app manifest, and the Slack voice
+  └── CLI           deterministic init, setup, doctor, and slack
 
 Repository: specific and reviewable
   ├── .nemeda/agent-kit.json   identity, profiles, tools, Drive links, Airtable ids
@@ -17,7 +18,8 @@ Machine-local: assembled by `setup`, verified by `doctor`, never committed
   ├── docs/, config/, .claude/skills, .claude/commands   symlinks into Drive
   ├── nested code repository clones
   ├── .env.local               personal secrets (AIRTABLE_API_KEY)
-  └── .nemeda/state/           hook throttles and dedupe caches
+  ├── .nemeda/state/           hook throttles and dedupe caches
+  └── ~/.nemeda/               runner registry, Slack tokens, runner state
 
 External systems: live and authorized
   └── GitHub, Drive, Airtable, Slack, Figma, calendars, and other MCP connectors
@@ -32,6 +34,31 @@ only a fast-path for immediate feedback on top of that; it cannot be the sole
 mechanism because it only sees PRs the agent itself creates from a Bash tool.
 The agent never mutates client-visible state directly, and the hooks never
 block a tool (they always exit 0).
+
+## The Slack bridge
+
+The bridge exists so people without a checkout — product, delivery — can ask
+questions against the same repository context the coding agents use. It adds one
+process and one config section; it does not add a second source of truth.
+
+Socket Mode is what removes the infrastructure: the runner's WebSocket is
+outbound, so there is no server, no public URL, and no tunnel. Each person runs
+their own Slack app and their own runner, which makes routing deterministic
+(Slack delivers a mention only to that app's connection) and keeps every answer
+billed to that person's own agent subscription through the local CLI. Nothing is
+shared between teammates — separate apps, separate tokens, separate plans — so
+the design has no shared secret.
+
+The reduced surface is deliberate. The runner narrows the backend to
+`Read`/`Grep`/`Glob` plus the kit's own read-only MCP server, denies the write
+and network tools, and sets `NEMEDA_SLACK_RUNNER=1` so the plugin's own hooks
+no-op inside a Slack-triggered session. Slack message text is treated as
+untrusted data throughout: the voice prompt states it explicitly, and the tool
+set means an injected instruction has nothing to act on.
+
+Availability is the honest trade for zero infrastructure: the bot is up while
+the laptop is. Slack's presence indicator makes that visible without the runner
+posting anything.
 
 ## Portability boundary
 
