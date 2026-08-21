@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   ALLOWED_SLACK_METHODS,
-  createSseParser,
   decideRelayRoute,
   generatePairingCode,
   generateRunnerToken,
@@ -79,11 +78,4 @@ test("the Slack method whitelist covers what the runner uses and nothing dangero
   for (const method of ["admin.users.remove", "users.list", "chat.update", "files.upload", "auth.test"]) {
     assert.ok(!ALLOWED_SLACK_METHODS.has(method), method);
   }
-});
-
-test("createSseParser reassembles events across chunk boundaries", () => {
-  const parse = createSseParser();
-  assert.deepEqual(parse('data: {"a":1}\n\ndata: {"b'), ['{"a":1}']);
-  assert.deepEqual(parse('":2}\n\n: ping\n\n'), ['{"b":2}']);
-  assert.deepEqual(parse("data: uno\ndata: dos\n\n"), ["uno\ndos"]);
 });

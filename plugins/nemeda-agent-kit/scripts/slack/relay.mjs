@@ -27,6 +27,9 @@ import {
   parsePairingText
 } from "../lib/relay-protocol.mjs";
 
+const POLL_TIMEOUT_MS = 25000;
+const ONLINE_WINDOW_MS = 70000;
+const MAX_QUEUE = 20;
 const RECONNECT_BASE_MS = 1000;
 const RECONNECT_MAX_MS = 60000;
 
@@ -76,7 +79,7 @@ class Relay {
     this.pairingsPath = path.join(this.home, "pairings.json");
     this.pairings = new Map(); // userId -> { tokenHash, name, pairedAt }
     this.pending = new Map(); // code -> { name, createdAt, result }
-    this.connections = new Map(); // userId -> { response, guests, projects, name, connectedAt }
+    this.runners = new Map(); // userId -> { queue, waiter, timer, guests, projects, lastSeen }
     this.recentEvents = new Set();
   }
 
@@ -122,7 +125,7 @@ class Relay {
     const url = new URL(request.url, "http://relay");
     try {
       if (request.method === "GET" && url.pathname === "/healthz") {
-        json(response, 200, { ok: true, relayVersion: RELAY_VERSION, connected: this.connections.size });
+        json(response, 200, { ok: true, relayVersion: RELAY_VERSION, connected: this.onlineRunners().size });
         return;
       }
       if (request.method === "POST" && url.pathname === "/pair/start") {
@@ -152,24 +155,32 @@ class Relay {
         json(response, 204, {});
         return;
       }
-      if (url.pathname === "/runner/events" || url.pathname === "/runner/slack" || url.pathname === "/runner/register") {
+      if (url.pathname === "/runner/poll" || url.pathname === "/runner/slack" || url.pathname === "/runner/register") {
         const userId = this.authenticate(request);
         if (!userId) {
           json(response, 401, { error: "invalid runner token" });
           return;
         }
-        if (request.method === "GET" && url.pathname === "/runner/events") {
-          this.attachRunner(userId, response);
+        if (request.method === "GET" && url.pathname === "/runner/poll") {
+          this.handlePoll(userId, response);
           return;
         }
         if (request.method === "POST" && url.pathname === "/runner/register") {
           const body = JSON.parse((await readBody(request)) || "{}");
-          const connection = this.connections.get(userId);
-          if (connection) {
-            connection.guests = Array.isArray(body.guests) ? body.guests.slice(0, 50).map(String) : [];
-            connection.projects = Array.isArray(body.projects) ? body.projects.slice(0, 50) : [];
-          }
-          json(response, 200, { ok: true });
+          const record = this.runnerRecord(userId);
+          const wasOffline = !this.isOnline(userId);
+          record.lastSeen = Date.now();
+          if (wasOffline) log(`runner online: ${userId} (${this.onlineRunners().size} online)`);
+          record.guests = Array.isArray(body.guests) ? body.guests.slice(0, 50).map(String) : [];
+          record.projects = Array.isArray(body.projects) ? body.projects.slice(0, 50) : [];
+          json(response, 200, {
+            ok: true,
+            botUserId: this.botUserId,
+            botName: this.botName,
+            teamId: this.teamId,
+            userId,
+            relayVersion: RELAY_VERSION
+          });
           return;
         }
         if (request.method === "POST" && url.pathname === "/runner/slack") {
@@ -189,60 +200,81 @@ class Relay {
     }
   }
 
-  attachRunner(userId, response) {
-    const existing = this.connections.get(userId);
-    if (existing) {
-      try {
-        existing.response.end();
-      } catch {
-        // replacing a dead stream
-      }
+  // Long polling instead of SSE. A completed HTTP response is never buffered
+  // by a CDN, so events arrive instantly through Cloudflare, Azure, or any
+  // corporate proxy; an open stream is at the mercy of each hop's flush
+  // heuristics. Cost is one extra round trip per event, which is nothing next
+  // to the seconds an agent takes to answer.
+  runnerRecord(userId) {
+    let record = this.runners.get(userId);
+    if (!record) {
+      record = { queue: [], waiter: null, timer: null, guests: [], projects: [], lastSeen: 0 };
+      this.runners.set(userId, record);
     }
-    response.writeHead(200, {
-      "Content-Type": "text/event-stream",
-      "Cache-Control": "no-cache",
-      Connection: "keep-alive",
-      "X-Accel-Buffering": "no"
-    });
-    const record = { response, guests: [], projects: [], connectedAt: Date.now() };
-    this.connections.set(userId, record);
-    this.sendTo(userId, {
-      type: "hello",
-      userId,
-      botUserId: this.botUserId,
-      botName: this.botName,
-      teamId: this.teamId,
-      relayVersion: RELAY_VERSION
-    });
-    log(`runner connected: ${userId} (${this.connections.size} online)`);
+    return record;
+  }
+
+  isOnline(userId) {
+    const record = this.runners.get(userId);
+    return Boolean(record) && Date.now() - record.lastSeen < ONLINE_WINDOW_MS;
+  }
+
+  onlineRunners() {
+    const online = new Map();
+    for (const [userId, record] of this.runners) {
+      if (this.isOnline(userId)) online.set(userId, record);
+    }
+    return online;
+  }
+
+  flush(record, events) {
+    const waiter = record.waiter;
+    record.waiter = null;
+    if (record.timer) {
+      clearTimeout(record.timer);
+      record.timer = null;
+    }
+    if (!waiter) return;
+    try {
+      json(waiter, 200, { events });
+    } catch {
+      // client vanished mid-write; the events stay queued for the next poll
+    }
+  }
+
+  handlePoll(userId, response) {
+    const record = this.runnerRecord(userId);
+    const wasOffline = !this.isOnline(userId);
+    record.lastSeen = Date.now();
+    if (wasOffline) log(`runner online: ${userId} (${this.onlineRunners().size} online)`);
+    // A second poll from the same runner replaces the first; never hold two.
+    if (record.waiter) this.flush(record, []);
+    if (record.queue.length) {
+      const events = record.queue.splice(0, record.queue.length);
+      json(response, 200, { events });
+      return;
+    }
+    record.waiter = response;
+    record.timer = setTimeout(() => this.flush(record, []), POLL_TIMEOUT_MS);
     response.on("close", () => {
-      if (this.connections.get(userId) === record) {
-        this.connections.delete(userId);
-        log(`runner disconnected: ${userId} (${this.connections.size} online)`);
+      if (record.waiter === response) {
+        record.waiter = null;
+        if (record.timer) {
+          clearTimeout(record.timer);
+          record.timer = null;
+        }
       }
     });
   }
 
   sendTo(userId, message) {
-    const connection = this.connections.get(userId);
-    if (!connection) return false;
-    try {
-      connection.response.write(`data: ${JSON.stringify(message)}\n\n`);
-      return true;
-    } catch {
-      this.connections.delete(userId);
-      return false;
-    }
-  }
-
-  heartbeat() {
-    for (const [userId, connection] of this.connections) {
-      try {
-        connection.response.write(": ping\n\n");
-      } catch {
-        this.connections.delete(userId);
-      }
-    }
+    if (!this.isOnline(userId)) return false;
+    const record = this.runnerRecord(userId);
+    record.queue.push(message);
+    // A runner that stopped polling must not accumulate a backlog to replay.
+    if (record.queue.length > MAX_QUEUE) record.queue.splice(0, record.queue.length - MAX_QUEUE);
+    if (record.waiter) this.flush(record, record.queue.splice(0, record.queue.length));
+    return true;
   }
 
   // --- Slack side ----------------------------------------------------------
@@ -280,14 +312,10 @@ class Relay {
       if (isUnlinkCommand(event.text)) {
         const had = this.pairings.delete(event.user);
         this.saveState();
-        const connection = this.connections.get(event.user);
-        if (connection) {
-          try {
-            connection.response.end();
-          } catch {
-            // stream already gone
-          }
-          this.connections.delete(event.user);
+        const record = this.runners.get(event.user);
+        if (record) {
+          this.flush(record, [{ type: "unlinked" }]);
+          this.runners.delete(event.user);
         }
         await slackApi(this.botToken, "chat.postMessage", {
           channel: event.channel,
@@ -301,7 +329,7 @@ class Relay {
       event,
       botUserId: this.botUserId,
       pairedUsers: new Set(this.pairings.keys()),
-      connections: this.connections
+      connections: this.onlineRunners()
     });
     if (decision.action === "ignore") return;
 
@@ -396,7 +424,6 @@ class Relay {
       this.handleHttp(request, response).catch((error) => json(response, 500, { error: error.message }));
     });
     server.listen(port, () => log(`relay listening on :${port} as ${this.botName} (${this.pairings.size} paired)`));
-    setInterval(() => this.heartbeat(), 25000).unref();
 
     let backoff = RECONNECT_BASE_MS;
     for (;;) {
