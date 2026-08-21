@@ -461,7 +461,8 @@ class Relay {
 }
 
 export async function runRelay(environment = process.env) {
-  const port = Number(environment.RELAY_PORT || 8787);
+  // PORT is what App Service, Container Apps, Fly, and Railway all inject.
+  const port = Number(environment.RELAY_PORT || environment.PORT || 8787);
   await new Relay(environment).start(port);
 }
 
