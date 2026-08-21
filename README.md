@@ -7,9 +7,9 @@ same operational baseline without copying skills or tool configuration into ever
 project. A small `.nemeda/agent-kit.json` file identifies each repository; normal
 project instructions stay in `AGENTS.md`.
 
-> Status: private experimental MVP. The repository currently lives under
-> `marcnaa` while the package is validated. It is not yet an official Nemeda
-> distribution.
+> Status: early release. The core (skills, MCP context, CLI, Airtable hooks) is
+> in daily use; the Slack relay is newer and has been exercised by one team.
+> Interfaces may still change before 1.0.
 
 ## What it includes
 
@@ -50,10 +50,7 @@ project instructions stay in `AGENTS.md`.
 - A portable Agent Plugins `plugin.json` + `mcp.json` core.
 - A versioned JSON Schema and sanitized Milence/Scharlab examples.
 
-## Install from this private repository
-
-Prerequisite: GitHub access to `marcnaa/nemeda-agent-kit` through your normal
-Git credentials.
+## Install
 
 ### Codex
 
@@ -61,32 +58,28 @@ Git credentials.
 codex plugin marketplace add marcnaa/nemeda-agent-kit
 ```
 
-Open `/plugins`, select **Nemeda Agent Kit Private**, install
-`nemeda-agent-kit`, then start a new session.
+Open `/plugins`, select **Nemeda Agent Kit**, install `nemeda-agent-kit`, then
+start a new session.
 
 ### Claude Code
 
 ```bash
 claude plugin marketplace add marcnaa/nemeda-agent-kit
-claude plugin install nemeda-agent-kit@nemeda-agent-kit-private
+claude plugin install nemeda-agent-kit@nemeda-agent-kit
 ```
 
 Run `/reload-plugins` or start a new session.
 
 ### Claude Desktop organization marketplace
 
-Claude Desktop organization marketplaces use a managed GitHub sync rather than
-the local Git credentials used by Claude Code. The repository must be private or
-internal, and the Claude GitHub App must have access to it.
-
 In **Organization settings → Plugins → Add plugin → GitHub**, enter
-`marcnaa/nemeda-agent-kit` in `owner/repo` form. Manual sync uses the GitHub App
-installation token. Automatic sync additionally requires repository admin access
-and the App's Webhooks read/write permission.
+`marcnaa/nemeda-agent-kit` in `owner/repo` form. Managed sync uses a GitHub App
+installation token; automatic sync additionally requires repository admin
+access and the App's Webhooks read/write permission.
 
 Keep plugin sources relative to this repository, as in
-`./plugins/nemeda-agent-kit`; managed sync cannot fetch plugin code from a separate
-private repository.
+`./plugins/nemeda-agent-kit`; managed sync cannot fetch plugin code from a
+separate repository.
 
 ### Local development install
 
@@ -96,7 +89,7 @@ locally, point the marketplace at the checkout instead:
 
 ```bash
 claude plugin marketplace add /path/to/ai-workspace-plugin
-claude plugin install nemeda-agent-kit@nemeda-agent-kit-private
+claude plugin install nemeda-agent-kit@nemeda-agent-kit
 ```
 
 After each change, run `/reload-plugins` (or restart the session).
@@ -160,6 +153,7 @@ bot setup.
 │   ├── schemas/                            # Per-repository contract
 │   ├── scripts/                            # CLI, MCP server, hook scripts, lib/
 │   └── tests/
+├── deploy/relay/                           # Dockerfile + Azure recipe
 ├── examples/
 └── docs/
 ```
@@ -169,3 +163,22 @@ bot setup.
 The plugin owns reusable behavior. Each repository owns its identity, profiles,
 tool requirements, and project rules. Credentials and customer content are never
 packaged in the plugin.
+
+## Contributing
+
+Run the checks before opening a pull request:
+
+```bash
+cd plugins/nemeda-agent-kit && npm test
+claude plugin validate ./plugins/nemeda-agent-kit
+git diff --check
+```
+
+The tests are `node --test` with no dependencies, and the whole kit is written
+to stay dependency-free — please keep it that way. Reusable behavior belongs in
+the plugin, project specifics in each repository's `.nemeda/agent-kit.json`.
+See [AGENTS.md](AGENTS.md) for the full contributor rules.
+
+## License
+
+[Apache-2.0](LICENSE). Copyright 2026 Nemeda.

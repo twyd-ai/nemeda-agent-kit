@@ -138,7 +138,7 @@ class Relay {
         const code = generatePairingCode();
         this.pending.set(code, { name: String(body.name || "runner").slice(0, 60), createdAt: Date.now(), result: null });
         log(`pairing code issued: ${code}`);
-        json(response, 200, { code, expiresInSeconds: PAIRING_TTL_MS / 1000, hint: `Envía por DM al bot: vincular ${code}` });
+        json(response, 200, { code, expiresInSeconds: PAIRING_TTL_MS / 1000, hint: `DM the bot: link ${code}` });
         return;
       }
       if (request.method === "GET" && url.pathname === "/pair/wait") {
@@ -305,7 +305,7 @@ class Relay {
     const entry = this.pending.get(code);
     const reply = (text) => slackApi(this.botToken, "chat.postMessage", { channel: event.channel, text });
     if (!entry) {
-      await reply("Ese código no existe o ha caducado. Genera otro con `nemeda-agent slack join <url>`.");
+      await reply("That code does not exist or has expired. Generate another with `nemeda-agent slack join <url>`.");
       return;
     }
     const token = generateRunnerToken();
@@ -320,7 +320,7 @@ class Relay {
       teamId: this.teamId
     };
     log(`paired ${event.user} (${entry.name})`);
-    await reply(`Vinculado ✅ — tu agente (*${entry.name}*) responderá tus preguntas en cuanto esté en marcha.`);
+    await reply(`Linked ✅ — your agent (*${entry.name}*) will answer your questions once it is running.`);
   }
 
   async onSlackEvent(event) {
@@ -340,7 +340,7 @@ class Relay {
         }
         await slackApi(this.botToken, "chat.postMessage", {
           channel: event.channel,
-          text: had ? "Desvinculado. Tu agente ya no puede conectarse con el token anterior." : "No tenías ningún agente vinculado."
+          text: had ? "Unlinked. Your agent can no longer connect with its old token." : "You had no agent linked."
         });
         return;
       }
@@ -357,18 +357,18 @@ class Relay {
     if (decision.action === "forward") {
       if (!this.sendTo(decision.target, { type: "slack_event", event })) {
         // The stream died between the check and the write; treat as offline.
-        await this.replyDirectly(event, "Tu agente se acaba de desconectar. Arráncalo y vuelve a preguntar.");
+        await this.replyDirectly(event, "Your agent just went offline. Start it and ask again.");
       }
       return;
     }
     if (decision.action === "offline") {
-      await this.replyDirectly(event, "Tu agente no está conectado ahora mismo. Arranca `nemeda-agent slack run` en tu máquina y vuelve a preguntar.");
+      await this.replyDirectly(event, "Your agent is not connected. Run `nemeda-agent slack run` on your machine and ask again.");
       return;
     }
     if (decision.action === "instructions") {
       await this.replyDirectly(
         event,
-        "No tienes ningún agente vinculado. En tu máquina: `nemeda-agent slack join <url-del-relay>` y mándame por DM el código que te dé. Si no tienes el kit instalado, pide a tu equipo la guía de instalación."
+        "You have no agent linked yet. On your machine run `nemeda-agent slack join <relay-url>`, then DM me the code it prints. If you do not have the kit installed, ask your team for the setup guide."
       );
     }
   }

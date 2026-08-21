@@ -21,11 +21,5 @@
     "protectSecrets": true,
     "conversationLanguage": "es",
     "artifactLanguage": "en"
-  },
-  "slack": {
-    "channels": ["C0BQY0H1EH0"],
-    "owner": "U0BC6JB0A3C",
-    "backend": "claude",
-    "model": "sonnet"
   }
 }

@@ -429,15 +429,15 @@ export async function joinRelay(relayUrl, serverName = "", environment = process
     body: JSON.stringify({ name: os.hostname() })
   }).then((response) => response.json());
   if (!started.code) throw new Error(`The relay did not issue a pairing code: ${JSON.stringify(started)}`);
-  console.log(`\nCódigo de vinculación: ${started.code}`);
-  console.log(`Envía este DM al bot de Slack:  vincular ${started.code}`);
-  console.log(`(caduca en ${Math.round(started.expiresInSeconds / 60)} minutos; esperando...)\n`);
+  console.log(`\nPairing code: ${started.code}`);
+  console.log(`Send this DM to the Slack bot:  link ${started.code}`);
+  console.log(`(expires in ${Math.round(started.expiresInSeconds / 60)} minutes; waiting...)\n`);
   const deadline = Date.now() + started.expiresInSeconds * 1000;
   while (Date.now() < deadline) {
     await new Promise((resolve) => setTimeout(resolve, 3000));
     const response = await fetch(`${url}/pair/wait?code=${encodeURIComponent(started.code)}`);
     if (response.status === 204) continue;
-    if (response.status === 410) throw new Error("El código ha caducado. Vuelve a ejecutar join.");
+    if (response.status === 410) throw new Error("The code expired. Run join again.");
     const result = await response.json();
     if (result.token) {
       const name = serverName || new URL(url).hostname.split(".")[0];
@@ -448,11 +448,11 @@ export async function joinRelay(relayUrl, serverName = "", environment = process
         userName: result.userName,
         server: name,
         envPath: serversPath(environment),
-        nextSteps: ["nemeda-agent slack run   (o `slack install` para dejarlo fijo)"]
+        nextSteps: ["nemeda-agent slack run   (or `slack install` to keep it running)"]
       };
     }
   }
-  throw new Error("Nadie reclamó el código a tiempo. Vuelve a ejecutar join.");
+  throw new Error("Nobody claimed the code in time. Run join again.");
 }
 
 export function leaveRelay(environment = process.env) {
@@ -462,8 +462,8 @@ export function leaveRelay(environment = process.env) {
   updateEnvLocal(homeDirectory(environment), { NEMEDA_RELAY_URL: "", NEMEDA_RELAY_TOKEN: "" });
   return {
     note: name
-      ? `Perfil "${name}" borrado de este equipo. Manda \`desvincular\` por DM al bot para revocarlo también en el relay.`
-      : "No había ningún relay activo."
+      ? `Profile "${name}" removed from this machine. DM the bot \`unlink\` to revoke it on the relay too.`
+      : "No relay was active."
   };
 }
 
@@ -485,7 +485,7 @@ export function useServer(name, environment = process.env) {
   const state = migrateFromEnv(loadServers(environment), effectiveEnvironment(environment));
   if (!state.servers[name]) {
     const known = Object.keys(state.servers).join(", ") || "ninguno";
-    throw new Error(`No conozco el servidor "${name}". Tengo: ${known}. Añade uno con \`nemeda-agent slack join <url> --as <nombre>\`.`);
+    throw new Error(`Unknown server "${name}". Known: ${known}. Add one with \`nemeda-agent slack join <url> --as <name>\`.`);
   }
   saveServers({ ...state, active: name }, environment);
   return { active: name, url: normalizeUrl(state.servers[name].url) };
@@ -493,7 +493,7 @@ export function useServer(name, environment = process.env) {
 
 export function forgetServer(name, environment = process.env) {
   const state = migrateFromEnv(loadServers(environment), effectiveEnvironment(environment));
-  if (!state.servers[name]) throw new Error(`No conozco el servidor "${name}".`);
+  if (!state.servers[name]) throw new Error(`Unknown server "${name}".`);
   saveServers(removeServer(state, name), environment);
   return { removed: name };
 }
