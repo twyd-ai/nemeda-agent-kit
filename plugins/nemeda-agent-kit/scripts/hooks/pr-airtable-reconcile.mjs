@@ -6,6 +6,10 @@
 // opened (web UI, another machine, `gh` CLI). Always exits 0.
 import { reconcilePrs } from "../lib/hooks.mjs";
 
+// The Slack runner injects repository context itself and must stay read-only,
+// so no hook side effects run inside a Slack-triggered session.
+if (process.env.NEMEDA_SLACK_RUNNER) process.exit(0);
+
 let input = "";
 if (!process.stdin.isTTY) {
   for await (const chunk of process.stdin) input += chunk;

@@ -6,7 +6,7 @@ import {
   workspaceDoctor
 } from "./lib/workspace.mjs";
 
-const SERVER_INFO = { name: "nemeda-agent-kit", version: "0.2.3" };
+const SERVER_INFO = { name: "nemeda-agent-kit", version: "0.3.0" };
 
 const tools = [
   {
