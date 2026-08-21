@@ -94,7 +94,9 @@ class Relay {
   }
 
   saveState() {
-    writeFileSync(this.pairingsPath, JSON.stringify(Object.fromEntries(this.pairings), null, 2));
+    // Only token hashes live here, never a usable credential, but the file
+    // still maps Slack users to machines: keep it owner-only.
+    writeFileSync(this.pairingsPath, JSON.stringify(Object.fromEntries(this.pairings), null, 2), { mode: 0o600 });
   }
 
   authenticate(request) {

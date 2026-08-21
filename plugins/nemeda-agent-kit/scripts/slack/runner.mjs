@@ -179,17 +179,38 @@ class Runner {
     this.relayMode = Boolean(this.relayUrl && this.relayToken);
     const registry = loadRegistry(this.environment);
     if (registry.error) throw new Error(registry.error);
-    const { routes, projects, issues } = buildRoutes(registry.repos, registry);
-    this.routes = routes;
-    this.projects = projects;
-    for (const issue of issues) log(issue.level === "error" ? "error" : "warn", issue.message);
+    this.registry = registry;
+    this.rebuildRoutes(registry);
     if (!this.relayMode && (!this.botToken || !this.appToken)) {
       throw new Error(
         `Set SLACK_BOT_TOKEN and SLACK_APP_TOKEN in ${path.join(homeDirectory(this.environment), ".env.local")}, or join a relay with \`nemeda-agent slack join <url>\`.`
       );
     }
-    if (projects.length === 0) throw new Error("The registry routes no projects. List at least one configured repository in it.");
-    if (routes.size === 0) log("warn", "no channels are routed; answering in DMs only.");
+    // In relay mode the paired Slack identity arrives with the hello, so an
+    // empty registry owner is not fatal yet: `slack join` alone must be enough
+    // to onboard someone.
+    if (this.projects.length === 0 && !this.relayMode) {
+      throw new Error("The registry routes no projects. List at least one configured repository in it.");
+    }
+    if (this.routes.size === 0 && !this.relayMode) log("warn", "no channels are routed; answering in DMs only.");
+  }
+
+  rebuildRoutes(registry) {
+    const { routes, projects, issues } = buildRoutes(registry.repos, registry);
+    this.routes = routes;
+    this.projects = projects;
+    for (const issue of issues) log(issue.level === "error" ? "error" : "warn", issue.message);
+  }
+
+  // The relay vouches for who this runner belongs to, so that identity becomes
+  // the owner unless the registry already named one.
+  applyRelayIdentity(userId) {
+    if (!userId) return;
+    this.userId = userId;
+    this.rebuildRoutes({ ...this.registry, owner: this.registry.owner || userId });
+    if (this.projects.length === 0) {
+      log("error", "no projects: add repository paths to ~/.nemeda/runner.json");
+    }
   }
 
   rememberThread(key) {
@@ -503,7 +524,7 @@ class Runner {
           this.botUserId = message.botUserId;
           this.botName = message.botName;
           this.teamId = message.teamId;
-          this.userId = message.userId;
+          this.applyRelayIdentity(message.userId);
           const guests = [...new Set(this.projects.flatMap((project) => project.slack.guests))];
           await fetch(`${this.relayUrl}/runner/register`, {
             method: "POST",
