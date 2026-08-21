@@ -13,7 +13,6 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, appendFileSync } from "node:fs";
 import path from "node:path";
 import { loadEnvLocal } from "../lib/env.mjs";
-import { createSseParser } from "../lib/relay-protocol.mjs";
 import {
   buildBackendCommand,
   buildRoutes,
@@ -498,51 +497,46 @@ class Runner {
     });
   }
 
-  // One long-lived SSE stream from the relay; every complete `data:` payload
-  // is either the hello (identity) or a Slack event to run through the same
-  // pipeline Socket Mode uses. Reconnects with backoff, like the socket loop.
-  async relayConnectOnce() {
-    const controller = new AbortController();
-    const response = await fetch(`${this.relayUrl}/runner/events`, {
-      headers: { Authorization: `Bearer ${this.relayToken}`, Accept: "text/event-stream" },
-      signal: controller.signal
+  // Long polling: each request returns a complete HTTP response, which no CDN
+  // or corporate proxy buffers. An open stream would be at the mercy of every
+  // hop's flush heuristics — measured at 19s of delay through a Cloudflare
+  // tunnel, which is unusable for a chat bot.
+  async relayRegister() {
+    const response = await fetch(`${this.relayUrl}/runner/register`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${this.relayToken}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        guests: [...new Set(this.projects.flatMap((project) => project.slack.guests))],
+        projects: this.projects.map((project) => ({ id: project.projectId, name: project.projectName }))
+      })
     });
     if (response.status === 401) throw new Error("the relay rejected the runner token; run `nemeda-agent slack join <url>` again.");
-    if (!response.ok || !response.body) throw new Error(`relay stream failed: HTTP ${response.status}`);
-    log("relay stream connected");
-    const parse = createSseParser();
-    const decoder = new TextDecoder();
-    for await (const chunk of response.body) {
-      for (const data of parse(decoder.decode(chunk, { stream: true }))) {
-        let message;
-        try {
-          message = JSON.parse(data);
-        } catch {
-          continue;
-        }
-        if (message.type === "hello") {
-          this.botUserId = message.botUserId;
-          this.botName = message.botName;
-          this.teamId = message.teamId;
-          this.applyRelayIdentity(message.userId);
-          const guests = [...new Set(this.projects.flatMap((project) => project.slack.guests))];
-          await fetch(`${this.relayUrl}/runner/register`, {
-            method: "POST",
-            headers: { Authorization: `Bearer ${this.relayToken}`, "Content-Type": "application/json" },
-            body: JSON.stringify({
-              guests,
-              projects: this.projects.map((project) => ({ id: project.projectId, name: project.projectName }))
-            })
-          }).catch((error) => log("warn", `register failed: ${error.message}`));
-          log(`ready via relay as ${this.botName} for ${this.projects.length} project(s)`);
-          continue;
-        }
-        if (message.type === "slack_event") {
-          this.handleEvent(message.event).catch((error) => log("error", error.message));
-        }
+    if (!response.ok) throw new Error(`relay register failed: HTTP ${response.status}`);
+    const identity = await response.json();
+    this.botUserId = identity.botUserId;
+    this.botName = identity.botName;
+    this.teamId = identity.teamId;
+    this.applyRelayIdentity(identity.userId);
+    return identity;
+  }
+
+  async relayPollOnce() {
+    const response = await fetch(`${this.relayUrl}/runner/poll`, {
+      headers: { Authorization: `Bearer ${this.relayToken}` }
+    });
+    if (response.status === 401) throw new Error("the relay rejected the runner token; run `nemeda-agent slack join <url>` again.");
+    if (!response.ok) throw new Error(`relay poll failed: HTTP ${response.status}`);
+    const payload = await response.json();
+    for (const message of payload.events || []) {
+      if (message.type === "unlinked") {
+        log("this runner was unlinked from the relay; stopping.");
+        process.exit(0);
+      }
+      if (message.type === "slack_event") {
+        // Deliberately not awaited: a slow answer must not stall the next poll.
+        this.handleEvent(message.event).catch((error) => log("error", error.message));
       }
     }
-    return "close";
   }
 
   async start() {
@@ -550,12 +544,22 @@ class Runner {
     if (this.relayMode) {
       log(`relay mode: ${this.relayUrl}`);
       let backoff = RECONNECT_BASE_MS;
+      let registered = false;
       for (;;) {
         try {
-          await this.relayConnectOnce();
+          if (!registered) {
+            await this.relayRegister();
+            registered = true;
+            log(`ready via relay as ${this.botName} for ${this.projects.length} project(s)`);
+          }
+          await this.relayPollOnce();
           backoff = RECONNECT_BASE_MS;
+          continue;
         } catch (error) {
           log("error", error.message);
+          // Re-register on the way back: the relay may have restarted and
+          // forgotten this runner's guests and projects.
+          registered = false;
           backoff = Math.min(backoff * 2, RECONNECT_MAX_MS);
         }
         await new Promise((resolve) => setTimeout(resolve, backoff));

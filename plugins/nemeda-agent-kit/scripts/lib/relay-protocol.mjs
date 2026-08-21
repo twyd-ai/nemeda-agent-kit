@@ -72,24 +72,3 @@ export function decideRelayRoute({ event, botUserId, pairedUsers, connections })
     ? { action: "offline", reason: "runner paired but not connected" }
     : { action: "instructions", reason: "user has no runner" };
 }
-
-// Incremental server-sent-events parser. Feed it chunks, get complete events.
-export function createSseParser() {
-  let buffer = "";
-  return function push(chunk) {
-    buffer += chunk;
-    const events = [];
-    let boundary;
-    while ((boundary = buffer.indexOf("\n\n")) >= 0) {
-      const block = buffer.slice(0, boundary);
-      buffer = buffer.slice(boundary + 2);
-      const data = block
-        .split("\n")
-        .filter((line) => line.startsWith("data:"))
-        .map((line) => line.slice(5).trimStart())
-        .join("\n");
-      if (data) events.push(data);
-    }
-    return events;
-  };
-}
