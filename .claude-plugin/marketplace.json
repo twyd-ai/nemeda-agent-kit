@@ -1,10 +1,10 @@
 {
-  "name": "nemeda-agent-kit-private",
+  "name": "nemeda-agent-kit",
   "owner": {
     "name": "Marc Noguera"
   },
   "metadata": {
-    "description": "Private development marketplace for Nemeda Agent Kit"
+    "description": "Marketplace for Nemeda Agent Kit"
   },
   "plugins": [
     {

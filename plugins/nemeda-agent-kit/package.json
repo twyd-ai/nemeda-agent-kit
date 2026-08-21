@@ -2,6 +2,13 @@
   "name": "@nemeda/agent-kit",
   "version": "0.3.0",
   "private": true,
+  "license": "Apache-2.0",
+  "author": "Nemeda",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/marcnaa/nemeda-agent-kit.git",
+    "directory": "plugins/nemeda-agent-kit"
+  },
   "description": "Portable methodology, tools, and repository context for AI coding agents.",
   "type": "module",
   "bin": {

@@ -240,9 +240,9 @@ export function classifyEvent({ event, botUserId, route, knownThreads = new Set(
   return { action: "answer", question, threadTs, isDirectMessage };
 }
 
-// A short imperative like "borra tus mensajes" / "limpia el chat" asks the bot
-// to delete its own messages here. Questions ("¿puedo borrar mensajes...?") and
-// long sentences never match, so real questions still reach the backend.
+// A short imperative like "delete your messages" / "borra tus mensajes" asks the
+// bot to delete its own messages here. Questions ("can I delete messages...?")
+// and long sentences never match, so real questions still reach the backend.
 export function isPurgeCommand(text) {
   const clean = String(text || "").trim();
   if (!clean || clean.length > 60 || clean.includes("?")) return false;
