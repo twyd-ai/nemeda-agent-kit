@@ -82,9 +82,19 @@ export function migrateFromEnv(state, environment = process.env) {
 
 // What the runner should connect to: the active profile, or the bare env pair
 // when no profiles exist at all.
-export function resolveActiveServer(environment = process.env) {
+// `name` overrides the active profile, so one machine can run a runner per
+// relay at once — keeping production answering while you test a local relay.
+export function resolveActiveServer(environment = process.env, name = "") {
   const merged = effectiveEnvironment(environment);
   const state = migrateFromEnv(loadServers(environment), merged);
+  if (name) {
+    const chosen = state.servers[name];
+    if (!chosen?.url || !chosen?.token) {
+      const known = Object.keys(state.servers).join(", ") || "ninguno";
+      throw new Error(`No conozco el servidor "${name}". Tengo: ${known}.`);
+    }
+    return { name, url: normalizeUrl(chosen.url), token: chosen.token };
+  }
   const entry = state.servers[state.active];
   if (entry?.url && entry?.token) {
     return { name: state.active, url: normalizeUrl(entry.url), token: entry.token };

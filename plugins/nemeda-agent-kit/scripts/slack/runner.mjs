@@ -150,12 +150,12 @@ function runBackend(route, options) {
 // --- runner ---------------------------------------------------------------
 
 class Runner {
-  constructor(environment = process.env) {
+  constructor(environment = process.env, serverName = "") {
     this.environment = environment;
+    this.serverName = serverName;
     this.recentEvents = new Set();
-    this.knownThreads = new Set(readState("slack-threads.json", [], environment));
-    this.dmProjects = readState("slack-dm.json", {}, environment);
-    this.rates = readState("slack-rate.json", {}, environment);
+    this.knownThreads = new Set();
+    this.dmProjects = {};
     this.busy = new Set();
   }
 
@@ -174,7 +174,7 @@ class Runner {
     loadEnvLocal(homeDirectory(this.environment), this.environment);
     this.botToken = this.environment.SLACK_BOT_TOKEN || "";
     this.appToken = this.environment.SLACK_APP_TOKEN || "";
-    const server = resolveActiveServer(this.environment);
+    const server = resolveActiveServer(this.environment, this.serverName);
     this.relayUrl = server?.url || "";
     this.relayToken = server?.token || "";
     this.relayName = server?.name || "";
@@ -195,6 +195,19 @@ class Runner {
       throw new Error("The registry routes no projects. List at least one configured repository in it.");
     }
     if (this.routes.size === 0 && !this.relayMode) log("warn", "no channels are routed; answering in DMs only.");
+    this.loadState();
+  }
+
+  // Two runners on one machine (production and development) must not share
+  // bookkeeping, so relay-mode state is namespaced by profile.
+  stateFile(base) {
+    return this.relayMode && this.relayName ? `slack-${this.relayName}-${base}.json` : `slack-${base}.json`;
+  }
+
+  loadState() {
+    this.knownThreads = new Set(readState(this.stateFile("threads"), [], this.environment));
+    this.dmProjects = readState(this.stateFile("dm"), {}, this.environment);
+    this.rates = readState(this.stateFile("rate"), {}, this.environment);
   }
 
   rebuildRoutes(registry) {
@@ -220,7 +233,7 @@ class Runner {
     if (this.knownThreads.size > 2000) {
       this.knownThreads = new Set([...this.knownThreads].slice(-1000));
     }
-    writeState("slack-threads.json", [...this.knownThreads], this.environment);
+    writeState(this.stateFile("threads"), [...this.knownThreads], this.environment);
   }
 
   // Slack retries anything not acked within three seconds, so the envelope is
@@ -375,7 +388,7 @@ class Runner {
 
     if (this.dmProjects[event.channel] !== route.projectId) {
       this.dmProjects[event.channel] = route.projectId;
-      writeState("slack-dm.json", this.dmProjects, this.environment);
+      writeState(this.stateFile("dm"), this.dmProjects, this.environment);
     }
     if (resolution.kind === "switch") {
       await say(`Hecho, ahora hablamos de *${route.projectName}*.`);
@@ -397,7 +410,7 @@ class Runner {
   async answer(event, decision, route) {
     const limit = rateLimit(this.rates, `${route.projectId}:${event.user}`, route.slack.maxQuestionsPerHour, Date.now());
     this.rates = limit.state;
-    writeState("slack-rate.json", this.rates, this.environment);
+    writeState(this.stateFile("rate"), this.rates, this.environment);
     if (!limit.allowed) {
       await this.try("chat.postMessage", {
         channel: event.channel,
@@ -593,8 +606,8 @@ class Runner {
   }
 }
 
-export async function runSlackRunner(environment = process.env) {
-  const runner = new Runner(environment);
+export async function runSlackRunner(environment = process.env, serverName = "") {
+  const runner = new Runner(environment, serverName);
   await runner.start();
 }
 

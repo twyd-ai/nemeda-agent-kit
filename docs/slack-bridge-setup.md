@@ -219,11 +219,32 @@ Profiles live in `~/.nemeda/servers.json` (owner-only: it holds runner tokens).
 A setup that predates profiles is adopted automatically as `default`, so
 nothing breaks. Restart the runner after switching.
 
+You do not have to choose one at a time. `--server` runs a runner against a
+named relay regardless of which profile is active, so production keeps
+answering while you exercise a development relay next to it:
+
+```bash
+nemeda-agent slack run --server default &   # production keeps working
+nemeda-agent slack run --server dev         # the one you are changing
+```
+
+Relay-mode bookkeeping (thread memory, DM project, rate limits) is namespaced
+per profile, so the two never race on the same files.
+
 **Switching your own runner is safe for everyone else. Running a second relay
 against the same Slack app is not.** Both relays would hold a Socket Mode
 connection and Slack would split events between them, so half the team's
 questions would hit your development relay. Give a development relay its own
-Slack app — the manifest is the same, and the app is free to create.
+Slack app — the manifest is the same apart from the name, and the app is free
+to create. Give it a different colour too: two bots that answer identically are
+easy to confuse, and confusing them means debugging the wrong process.
+
+A development relay then runs from its own home directory and port:
+
+```bash
+NEMEDA_RELAY_HOME=~/.nemeda/relay-dev RELAY_PORT=8788 nemeda-agent slack relay
+nemeda-agent slack join http://localhost:8788 --as dev
+```
 
 ## For whoever runs the relay
 

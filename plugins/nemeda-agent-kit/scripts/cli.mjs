@@ -26,6 +26,7 @@ function parseArguments(argv) {
     else if (value === "--workspace") options.workspace = true;
     else if (value === "--dry-run") options.dryRun = true;
     else if (value === "--as") options.as = rest[++index];
+    else if (value === "--server") options.server = rest[++index];
     else if (value === "--forget") options.forget = rest[++index];
     else if (command === "slack" && ["ask", "join", "server"].includes(options.subcommand) && !options.question) options.question = value;
     else throw new Error(`Unknown argument: ${value}`);
@@ -51,6 +52,7 @@ Usage:
   nemeda-agent slack ask "question" [--cwd PATH]
   nemeda-agent slack join <https://relay-url> [--as NAME] | leave | relay
   nemeda-agent slack server [NAME] [--forget NAME]
+  nemeda-agent slack run [--server NAME]      # one runner per relay, side by side
 
 Commands:
   init     Create missing .nemeda/agent-kit.json and AGENTS.md safely.
@@ -147,7 +149,7 @@ async function runSlack(options) {
   }
   if (subcommand === "run") {
     const { runSlackRunner } = await import("./slack/runner.mjs");
-    await runSlackRunner();
+    await runSlackRunner(process.env, options.server || "");
     return 0;
   }
   if (subcommand === "join") {
