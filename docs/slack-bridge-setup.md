@@ -161,3 +161,138 @@ without spending a real conversation.
 | Bot answers in channel but not a thread follow-up | Follow-ups only work in threads the bot already answered in; mention it again otherwise |
 | Rate limit message | Per-user, per-project cap (default 20/hour); tune `maxQuestionsPerHour` in the repo's `slack` section |
 | `nemeda-agent` not found | Use the checkout form: `node plugins/nemeda-agent-kit/scripts/cli.mjs …` |
+
+---
+
+# Team mode: one app, one relay
+
+Everything above describes **solo mode**: your own Slack app, no server. Team
+mode replaces it with a single Slack app for the whole workspace, hosted on a
+small relay that does no AI work — it just forwards each question to the
+laptop of whoever asked. Answers still run on that person's machine, with that
+person's own plan. Both modes share the same runner.
+
+Joining, per person, is one command and one DM. No Slack app, no tokens, no
+scopes.
+
+## For the person joining
+
+```bash
+nemeda-agent slack join https://relay.example.com
+```
+
+It prints a code such as `LILA-2538`. Send the bot a DM:
+
+```text
+vincular LILA-2538
+```
+
+Because the code arrives through Slack, Slack itself proves who sent it — that
+is the whole identity mechanism, and it is why nobody can pair as someone else
+without access to their account. The runner token is stored in
+`~/.nemeda/.env.local` automatically. Then:
+
+```bash
+nemeda-agent slack run       # or slack install, to start at login
+nemeda-agent slack doctor    # relay reachable, token valid, projects answerable
+```
+
+List your repositories in `~/.nemeda/runner.json` as in solo mode. `owner` is
+optional here: the relay already knows who you are.
+
+To unpair, send `desvincular` by DM (revokes the token on the relay) or run
+`nemeda-agent slack leave` (forgets it locally).
+
+## Switching relays
+
+A machine can be paired with several relays — a production one and a local one
+you develop against — and switch between them without re-pairing:
+
+```bash
+nemeda-agent slack join http://localhost:8787 --as dev   # pair and name it
+nemeda-agent slack server                                # list, or pick interactively
+nemeda-agent slack server prod                           # switch
+nemeda-agent slack server --forget dev
+```
+
+Profiles live in `~/.nemeda/servers.json` (owner-only: it holds runner tokens).
+A setup that predates profiles is adopted automatically as `default`, so
+nothing breaks. Restart the runner after switching.
+
+You do not have to choose one at a time. `--server` runs a runner against a
+named relay regardless of which profile is active, so production keeps
+answering while you exercise a development relay next to it:
+
+```bash
+nemeda-agent slack run --server default &   # production keeps working
+nemeda-agent slack run --server dev         # the one you are changing
+```
+
+Relay-mode bookkeeping (thread memory, DM project, rate limits) is namespaced
+per profile, so the two never race on the same files.
+
+**Switching your own runner is safe for everyone else. Running a second relay
+against the same Slack app is not.** Both relays would hold a Socket Mode
+connection and Slack would split events between them, so half the team's
+questions would hit your development relay. Give a development relay its own
+Slack app — the manifest is the same apart from the name, and the app is free
+to create. Give it a different colour too: two bots that answer identically are
+easy to confuse, and confusing them means debugging the wrong process.
+
+A development relay then runs from its own home directory and port:
+
+```bash
+NEMEDA_RELAY_HOME=~/.nemeda/relay-dev RELAY_PORT=8788 nemeda-agent slack relay
+nemeda-agent slack join http://localhost:8788 --as dev
+```
+
+## For whoever runs the relay
+
+The relay needs the Slack app's two tokens in
+`$NEMEDA_RELAY_HOME/.env.local` (default `~/.nemeda/relay/`), created from the
+same manifest as solo mode:
+
+```bash
+NEMEDA_RELAY_HOME=/srv/nemeda-relay RELAY_PORT=8787 nemeda-agent slack relay
+```
+
+Put TLS in front of it — any tunnel or reverse proxy works, since the relay is
+plain HTTP on one port. For a local trial:
+
+```bash
+cloudflared tunnel --url http://localhost:8787
+```
+
+`trycloudflare.com` URLs are ephemeral: they change on every start, and each
+change means everyone re-runs `slack join`. Use a named tunnel or a real host
+for anything beyond a demo.
+
+State lives in `$NEMEDA_RELAY_HOME/pairings.json`: Slack user ids and token
+**hashes** only, never a usable credential and never message content. Questions
+and answers are held in memory just long enough to forward them.
+
+### What the relay can and cannot do
+
+It holds the only Slack tokens and can read what passes through it, so treat it
+as sensitive. It cannot touch a repository, run anything on a laptop, or manage
+the workspace: runners stay read-only, and the relay refuses any Slack method
+outside an eight-entry whitelist.
+
+### Hosting it for real
+
+A laptop is fine for trying this out, but the relay is shared infrastructure:
+while it is down, the bot is down for everyone. See
+[deploy/relay/README.md](../deploy/relay/README.md) for an Azure App Service
+recipe. Two constraints matter wherever it runs: it must be a **single
+instance** (two would split the Slack connection and the in-memory queues), and
+`NEMEDA_RELAY_HOME` must be persistent (losing `pairings.json` means everyone
+re-runs `slack join`).
+
+### Transport
+
+Runners reach the relay over plain HTTPS — `GET /runner/poll` long polls for up
+to 25 s, `POST /runner/slack` proxies whitelisted Slack calls. Nothing connects
+*into* a laptop, so no ports are opened and office networks need no changes.
+Long polling rather than SSE is deliberate: a held-open stream gets buffered by
+CDNs and proxies (19 s to first message through a Cloudflare tunnel), while a
+completed HTTP response does not (171 ms through the same tunnel).

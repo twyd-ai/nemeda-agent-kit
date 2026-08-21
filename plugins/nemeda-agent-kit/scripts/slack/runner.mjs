@@ -13,6 +13,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, appendFileSync } from "node:fs";
 import path from "node:path";
 import { loadEnvLocal } from "../lib/env.mjs";
+import { resolveActiveServer } from "../lib/slack-servers.mjs";
 import {
   buildBackendCommand,
   buildRoutes,
@@ -69,6 +70,19 @@ function tryApi(token, method, body) {
     log("warn", error.message);
     return null;
   });
+}
+
+// Relay-mode Slack access: the laptop holds no Slack tokens, so every Web API
+// call travels to the relay, which enforces a method whitelist.
+async function relayApi(relayUrl, relayToken, method, body) {
+  const response = await fetch(`${relayUrl}/runner/slack`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${relayToken}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ method, body })
+  });
+  const payload = await response.json().catch(() => ({ ok: false, error: "invalid_json" }));
+  if (!payload.ok) throw new Error(`relay slack ${method}: ${payload.error}`);
+  return payload;
 }
 
 // --- backend --------------------------------------------------------------
@@ -136,30 +150,82 @@ function runBackend(route, options) {
 // --- runner ---------------------------------------------------------------
 
 class Runner {
-  constructor(environment = process.env) {
+  constructor(environment = process.env, serverName = "") {
     this.environment = environment;
+    this.serverName = serverName;
     this.recentEvents = new Set();
-    this.knownThreads = new Set(readState("slack-threads.json", [], environment));
-    this.dmProjects = readState("slack-dm.json", {}, environment);
-    this.rates = readState("slack-rate.json", {}, environment);
+    this.knownThreads = new Set();
+    this.dmProjects = {};
     this.busy = new Set();
+  }
+
+  call(method, body) {
+    return this.relayMode ? relayApi(this.relayUrl, this.relayToken, method, body) : slackApi(this.botToken, method, body);
+  }
+
+  try(method, body) {
+    return this.call(method, body).catch((error) => {
+      log("warn", error.message);
+      return null;
+    });
   }
 
   load() {
     loadEnvLocal(homeDirectory(this.environment), this.environment);
     this.botToken = this.environment.SLACK_BOT_TOKEN || "";
     this.appToken = this.environment.SLACK_APP_TOKEN || "";
+    const server = resolveActiveServer(this.environment, this.serverName);
+    this.relayUrl = server?.url || "";
+    this.relayToken = server?.token || "";
+    this.relayName = server?.name || "";
+    this.relayMode = Boolean(this.relayUrl && this.relayToken);
     const registry = loadRegistry(this.environment);
     if (registry.error) throw new Error(registry.error);
+    this.registry = registry;
+    this.rebuildRoutes(registry);
+    if (!this.relayMode && (!this.botToken || !this.appToken)) {
+      throw new Error(
+        `Set SLACK_BOT_TOKEN and SLACK_APP_TOKEN in ${path.join(homeDirectory(this.environment), ".env.local")}, or join a relay with \`nemeda-agent slack join <url>\`.`
+      );
+    }
+    // In relay mode the paired Slack identity arrives with the hello, so an
+    // empty registry owner is not fatal yet: `slack join` alone must be enough
+    // to onboard someone.
+    if (this.projects.length === 0 && !this.relayMode) {
+      throw new Error("The registry routes no projects. List at least one configured repository in it.");
+    }
+    if (this.routes.size === 0 && !this.relayMode) log("warn", "no channels are routed; answering in DMs only.");
+    this.loadState();
+  }
+
+  // Two runners on one machine (production and development) must not share
+  // bookkeeping, so relay-mode state is namespaced by profile.
+  stateFile(base) {
+    return this.relayMode && this.relayName ? `slack-${this.relayName}-${base}.json` : `slack-${base}.json`;
+  }
+
+  loadState() {
+    this.knownThreads = new Set(readState(this.stateFile("threads"), [], this.environment));
+    this.dmProjects = readState(this.stateFile("dm"), {}, this.environment);
+    this.rates = readState(this.stateFile("rate"), {}, this.environment);
+  }
+
+  rebuildRoutes(registry) {
     const { routes, projects, issues } = buildRoutes(registry.repos, registry);
     this.routes = routes;
     this.projects = projects;
     for (const issue of issues) log(issue.level === "error" ? "error" : "warn", issue.message);
-    if (!this.botToken || !this.appToken) {
-      throw new Error(`SLACK_BOT_TOKEN and SLACK_APP_TOKEN must be set in ${path.join(homeDirectory(this.environment), ".env.local")}.`);
+  }
+
+  // The relay vouches for who this runner belongs to, so that identity becomes
+  // the owner unless the registry already named one.
+  applyRelayIdentity(userId) {
+    if (!userId) return;
+    this.userId = userId;
+    this.rebuildRoutes({ ...this.registry, owner: this.registry.owner || userId });
+    if (this.projects.length === 0) {
+      log("error", "no projects: add repository paths to ~/.nemeda/runner.json");
     }
-    if (projects.length === 0) throw new Error("The registry routes no projects. List at least one configured repository in it.");
-    if (routes.size === 0) log("warn", "no channels are routed; answering in DMs only.");
   }
 
   rememberThread(key) {
@@ -167,7 +233,7 @@ class Runner {
     if (this.knownThreads.size > 2000) {
       this.knownThreads = new Set([...this.knownThreads].slice(-1000));
     }
-    writeState("slack-threads.json", [...this.knownThreads], this.environment);
+    writeState(this.stateFile("threads"), [...this.knownThreads], this.environment);
   }
 
   // Slack retries anything not acked within three seconds, so the envelope is
@@ -175,7 +241,6 @@ class Runner {
   async onEnvelope(socket, message) {
     if (message.envelope_id) socket.send(JSON.stringify({ envelope_id: message.envelope_id }));
     if (message.type !== "events_api") return;
-    const event = message.payload?.event;
     const eventId = message.payload?.event_id;
     if (eventId) {
       if (this.recentEvents.has(eventId)) return;
@@ -184,6 +249,10 @@ class Runner {
         this.recentEvents = new Set([...this.recentEvents].slice(-RECENT_EVENT_CAP / 2));
       }
     }
+    await this.handleEvent(message.payload?.event);
+  }
+
+  async handleEvent(event) {
     if (event?.channel_type === "im") {
       await this.onDirectMessage(event);
       return;
@@ -193,12 +262,12 @@ class Runner {
     if (decision.action === "ignore") return;
 
     if (decision.action === "unrouted") {
-      await tryApi(this.botToken, "chat.postMessage", {
+      await this.try("chat.postMessage", {
         channel: event.channel,
         thread_ts: decision.threadTs,
         text: this.projects.length
-          ? `Este canal no está enrutado a ningún repo. Los que llevo son: ${this.projects.map((project) => project.projectName).join(", ")}.`
-          : "Todavía no tengo ningún repo configurado."
+          ? `This channel is not routed to a repository. I cover: ${this.projects.map((project) => project.projectName).join(", ")}.`
+          : "No repositories are configured yet."
       });
       return;
     }
@@ -206,11 +275,11 @@ class Runner {
     if (decision.action === "deny") {
       audit({ kind: "deny", channel: event.channel, user: event.user, project: route.projectId }, this.environment);
       if (route.slack.onUnauthorized === "ephemeral") {
-        await tryApi(this.botToken, "chat.postEphemeral", {
+        await this.try("chat.postEphemeral", {
           channel: event.channel,
           user: event.user,
           thread_ts: decision.threadTs,
-          text: `Este bot es de <@${route.slack.owner}>. Menciona el tuyo y responderá con tu plan.`
+          text: `This agent belongs to <@${route.slack.owner}>. Mention your own and it will answer on your plan.`
         });
       }
       return;
@@ -245,7 +314,7 @@ class Runner {
     const mine = [];
     let cursor;
     do {
-      const page = await tryApi(this.botToken, isDM ? "conversations.history" : "conversations.replies", {
+      const page = await this.try(isDM ? "conversations.history" : "conversations.replies", {
         channel: event.channel,
         ...(isDM ? {} : { ts: threadTs }),
         limit: 200,
@@ -260,17 +329,17 @@ class Runner {
     let deleted = 0;
     for (const ts of mine) {
       // chat.delete is heavily rate limited; one per second keeps Slack happy.
-      if (await tryApi(this.botToken, "chat.delete", { channel: event.channel, ts })) deleted += 1;
+      if (await this.try("chat.delete", { channel: event.channel, ts })) deleted += 1;
       await new Promise((resolve) => setTimeout(resolve, 1000));
     }
     return deleted;
   }
 
   async runPurge(event, threadTs) {
-    await tryApi(this.botToken, "reactions.add", { channel: event.channel, timestamp: event.ts, name: "eyes" });
+    await this.try("reactions.add", { channel: event.channel, timestamp: event.ts, name: "eyes" });
     const deleted = await this.purgeOwnMessages(event, threadTs);
-    await tryApi(this.botToken, "reactions.remove", { channel: event.channel, timestamp: event.ts, name: "eyes" });
-    await tryApi(this.botToken, "reactions.add", { channel: event.channel, timestamp: event.ts, name: "white_check_mark" });
+    await this.try("reactions.remove", { channel: event.channel, timestamp: event.ts, name: "eyes" });
+    await this.try("reactions.add", { channel: event.channel, timestamp: event.ts, name: "white_check_mark" });
     audit({ kind: "purge", channel: event.channel, user: event.user, deleted }, this.environment);
     log(`purged ${deleted} own message(s) in ${event.channel}`);
   }
@@ -284,11 +353,11 @@ class Runner {
   // it ("usa milence"), prefixing it ("milence: ..."), or having only one.
   async onDirectMessage(event) {
     if (event.bot_id || event.user === this.botUserId || event.subtype || !event.user || !stripMentions(event.text)) return;
-    const say = (text) => tryApi(this.botToken, "chat.postMessage", { channel: event.channel, text });
+    const say = (text) => this.try("chat.postMessage", { channel: event.channel, text });
 
     if (isPurgeCommand(stripMentions(event.text))) {
       if (this.isOwner(event.user)) await this.runPurge(event);
-      else await say("Borrar mensajes solo puede pedirlo el dueño del bot.");
+      else await say("Only the owner of this agent can ask it to delete messages.");
       return;
     }
 
@@ -300,11 +369,11 @@ class Runner {
     const menu = this.projects.map((project) => `\`${project.projectId}\``).join(", ");
 
     if (resolution.kind === "unknown-project") {
-      await say(`No llevo ningún proyecto llamado "${resolution.token}". Tengo: ${menu}.`);
+      await say(`I do not cover a project called "${resolution.token}". I have: ${menu}.`);
       return;
     }
     if (resolution.kind === "choose") {
-      await say(`¿Sobre qué proyecto? Tengo: ${menu}. Dime \`usa <proyecto>\` o empieza con \`<proyecto>: tu pregunta\`.`);
+      await say(`Which project? I have: ${menu}. Say \`use <project>\` or start with \`<project>: your question\`.`);
       return;
     }
 
@@ -312,17 +381,17 @@ class Runner {
     if (!this.isAllowed(route, event.user)) {
       audit({ kind: "deny", channel: event.channel, user: event.user, project: route.projectId }, this.environment);
       if (route.slack.onUnauthorized === "ephemeral") {
-        await say(`Este bot es de <@${route.slack.owner}>. Menciona el tuyo y responderá con tu plan.`);
+        await say(`This agent belongs to <@${route.slack.owner}>. Mention your own and it will answer on your plan.`);
       }
       return;
     }
 
     if (this.dmProjects[event.channel] !== route.projectId) {
       this.dmProjects[event.channel] = route.projectId;
-      writeState("slack-dm.json", this.dmProjects, this.environment);
+      writeState(this.stateFile("dm"), this.dmProjects, this.environment);
     }
     if (resolution.kind === "switch") {
-      await say(`Hecho, ahora hablamos de *${route.projectName}*.`);
+      await say(`Done — now we are talking about *${route.projectName}*.`);
       return;
     }
 
@@ -341,18 +410,18 @@ class Runner {
   async answer(event, decision, route) {
     const limit = rateLimit(this.rates, `${route.projectId}:${event.user}`, route.slack.maxQuestionsPerHour, Date.now());
     this.rates = limit.state;
-    writeState("slack-rate.json", this.rates, this.environment);
+    writeState(this.stateFile("rate"), this.rates, this.environment);
     if (!limit.allowed) {
-      await tryApi(this.botToken, "chat.postMessage", {
+      await this.try("chat.postMessage", {
         channel: event.channel,
         ...(decision.isDirectMessage ? {} : { thread_ts: decision.threadTs }),
-        text: `He llegado al límite de ${route.slack.maxQuestionsPerHour} preguntas por hora. Vuelve a intentarlo en ${limit.retryAfterMinutes} min.`
+        text: `That is my limit of ${route.slack.maxQuestionsPerHour} questions an hour. Try again in ${limit.retryAfterMinutes} min.`
       });
       return;
     }
 
     const started = Date.now();
-    await tryApi(this.botToken, "reactions.add", { channel: event.channel, timestamp: event.ts, name: "eyes" });
+    await this.try("reactions.add", { channel: event.channel, timestamp: event.ts, name: "eyes" });
 
     // In a DM the whole conversation is the session (scoped per project); in a
     // channel each thread is. Both resume across runner restarts.
@@ -371,14 +440,14 @@ class Runner {
 
     const chunks = result.text ? splitForSlack(toMrkdwn(result.text), route.slack.maxAnswerChars) : [];
     if (chunks.length === 0) {
-      await tryApi(this.botToken, "chat.postMessage", {
+      await this.try("chat.postMessage", {
         channel: event.channel,
         ...(decision.isDirectMessage ? {} : { thread_ts: decision.threadTs }),
-        text: `No he podido responder: ${result.error || "sin respuesta"}.`
+        text: `I could not answer: ${result.error || "no response"}.`
       });
     } else {
       for (const chunk of chunks) {
-        await tryApi(this.botToken, "chat.postMessage", {
+        await this.try("chat.postMessage", {
           channel: event.channel,
           ...(decision.isDirectMessage ? {} : { thread_ts: decision.threadTs }),
           text: chunk,
@@ -388,7 +457,7 @@ class Runner {
       }
       this.rememberThread(threadKey);
     }
-    await tryApi(this.botToken, "reactions.remove", { channel: event.channel, timestamp: event.ts, name: "eyes" });
+    await this.try("reactions.remove", { channel: event.channel, timestamp: event.ts, name: "eyes" });
     audit(
       {
         kind: "answer",
@@ -444,13 +513,80 @@ class Runner {
     });
   }
 
+  // Long polling: each request returns a complete HTTP response, which no CDN
+  // or corporate proxy buffers. An open stream would be at the mercy of every
+  // hop's flush heuristics — measured at 19s of delay through a Cloudflare
+  // tunnel, which is unusable for a chat bot.
+  async relayRegister() {
+    const response = await fetch(`${this.relayUrl}/runner/register`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${this.relayToken}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        guests: [...new Set(this.projects.flatMap((project) => project.slack.guests))],
+        projects: this.projects.map((project) => ({ id: project.projectId, name: project.projectName }))
+      })
+    });
+    if (response.status === 401) throw new Error("the relay rejected the runner token; run `nemeda-agent slack join <url>` again.");
+    if (!response.ok) throw new Error(`relay register failed: HTTP ${response.status}`);
+    const identity = await response.json();
+    this.botUserId = identity.botUserId;
+    this.botName = identity.botName;
+    this.teamId = identity.teamId;
+    this.applyRelayIdentity(identity.userId);
+    return identity;
+  }
+
+  async relayPollOnce() {
+    const response = await fetch(`${this.relayUrl}/runner/poll`, {
+      headers: { Authorization: `Bearer ${this.relayToken}` }
+    });
+    if (response.status === 401) throw new Error("the relay rejected the runner token; run `nemeda-agent slack join <url>` again.");
+    if (!response.ok) throw new Error(`relay poll failed: HTTP ${response.status}`);
+    const payload = await response.json();
+    for (const message of payload.events || []) {
+      if (message.type === "unlinked") {
+        log("this runner was unlinked from the relay; stopping.");
+        process.exit(0);
+      }
+      if (message.type === "slack_event") {
+        // Deliberately not awaited: a slow answer must not stall the next poll.
+        this.handleEvent(message.event).catch((error) => log("error", error.message));
+      }
+    }
+  }
+
   async start() {
-    // The rest of the CLI runs on Node 20; only the runner needs the global
-    // WebSocket, so the requirement is enforced here rather than in engines.
+    this.load();
+    if (this.relayMode) {
+      log(`relay mode: ${this.relayName} -> ${this.relayUrl}`);
+      let backoff = RECONNECT_BASE_MS;
+      let registered = false;
+      for (;;) {
+        try {
+          if (!registered) {
+            await this.relayRegister();
+            registered = true;
+            log(`ready via relay as ${this.botName} for ${this.projects.length} project(s)`);
+          }
+          await this.relayPollOnce();
+          backoff = RECONNECT_BASE_MS;
+          continue;
+        } catch (error) {
+          log("error", error.message);
+          // Re-register on the way back: the relay may have restarted and
+          // forgotten this runner's guests and projects.
+          registered = false;
+          backoff = Math.min(backoff * 2, RECONNECT_MAX_MS);
+        }
+        await new Promise((resolve) => setTimeout(resolve, backoff));
+      }
+    }
+    // The rest of the CLI runs on Node 20; only the direct runner needs the
+    // global WebSocket, so the requirement is enforced here rather than in
+    // engines.
     if (typeof WebSocket === "undefined") {
       throw new Error(`The Slack runner needs Node 22 or newer for its built-in WebSocket; this is Node ${process.versions.node}.`);
     }
-    this.load();
     const identity = await slackApi(this.botToken, "auth.test", {});
     this.botUserId = identity.user_id;
     this.botName = identity.user;
@@ -470,8 +606,8 @@ class Runner {
   }
 }
 
-export async function runSlackRunner(environment = process.env) {
-  const runner = new Runner(environment);
+export async function runSlackRunner(environment = process.env, serverName = "") {
+  const runner = new Runner(environment, serverName);
   await runner.start();
 }
 

@@ -1,0 +1,11 @@
+.git
+.github
+node_modules
+docs
+examples
+plugins/nemeda-agent-kit/tests
+plugins/nemeda-agent-kit/skills
+plugins/nemeda-agent-kit/hooks
+plugins/nemeda-agent-kit/slack
+**/.env*
+**/.DS_Store
