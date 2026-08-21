@@ -155,10 +155,31 @@ class Relay {
         json(response, 204, {});
         return;
       }
-      if (url.pathname === "/runner/poll" || url.pathname === "/runner/slack" || url.pathname === "/runner/register") {
+      if (
+        url.pathname === "/runner/poll" ||
+        url.pathname === "/runner/slack" ||
+        url.pathname === "/runner/register" ||
+        url.pathname === "/runner/whoami"
+      ) {
         const userId = this.authenticate(request);
         if (!userId) {
           json(response, 401, { error: "invalid runner token" });
+          return;
+        }
+        // Read-only identity check, so `slack doctor` can verify a token
+        // without clobbering the live runner's registered guests and projects.
+        if (request.method === "GET" && url.pathname === "/runner/whoami") {
+          const record = this.runners.get(userId);
+          json(response, 200, {
+            ok: true,
+            userId,
+            botName: this.botName,
+            botUserId: this.botUserId,
+            teamId: this.teamId,
+            online: this.isOnline(userId),
+            projects: record?.projects || [],
+            relayVersion: RELAY_VERSION
+          });
           return;
         }
         if (request.method === "GET" && url.pathname === "/runner/poll") {

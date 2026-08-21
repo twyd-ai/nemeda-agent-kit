@@ -105,12 +105,94 @@ async function slackApi(token, method, body = {}) {
   return response.json().catch(() => ({ ok: false, error: "invalid_json" }));
 }
 
+// In relay mode this machine holds no Slack tokens and owns no channel
+// routing, so the direct-mode checks would all fail for the wrong reasons.
+// What matters instead: can it reach the relay, is the token still good, and
+// does it have projects to answer about.
+async function relayDoctor(scratch, environment, checks) {
+  const relayUrl = String(scratch.NEMEDA_RELAY_URL || "").replace(/\/+$/, "");
+  checks.push({ status: "pass", code: "slack-mode", message: `Relay mode: ${relayUrl}` });
+
+  const registry = loadRegistry(environment);
+  if (registry.error) {
+    checks.push({ status: "fail", code: "slack-registry", message: registry.error });
+    return { checks };
+  }
+  checks.push({ status: "pass", code: "slack-registry", message: `${registry.path} lists ${registry.repos.length} repository path(s).` });
+
+  let health;
+  try {
+    const response = await fetch(`${relayUrl}/healthz`, { signal: AbortSignal.timeout(15000) });
+    health = await response.json();
+  } catch (error) {
+    checks.push({ status: "fail", code: "slack-relay-reach", message: `Cannot reach the relay: ${error.message}` });
+    return { checks };
+  }
+  checks.push(
+    health?.ok
+      ? { status: "pass", code: "slack-relay-reach", message: `Relay is up (${health.connected} runner(s) online).` }
+      : { status: "fail", code: "slack-relay-reach", message: `The relay answered but is not healthy: ${JSON.stringify(health)}` }
+  );
+
+  if (!scratch.NEMEDA_RELAY_TOKEN) {
+    checks.push({ status: "fail", code: "slack-relay-token", message: "No runner token; run `nemeda-agent slack join <url>`." });
+    return { checks };
+  }
+  const identity = await fetch(`${relayUrl}/runner/whoami`, {
+    headers: { Authorization: `Bearer ${scratch.NEMEDA_RELAY_TOKEN}` },
+    signal: AbortSignal.timeout(15000)
+  })
+    .then((response) => (response.ok ? response.json() : { ok: false, status: response.status }))
+    .catch((error) => ({ ok: false, error: error.message }));
+  if (!identity.ok) {
+    checks.push({
+      status: "fail",
+      code: "slack-relay-token",
+      message: identity.status === 401
+        ? "The relay rejected this runner token; run `nemeda-agent slack join <url>` again."
+        : `Identity check failed: ${identity.error || identity.status}`
+    });
+    return { checks };
+  }
+  checks.push({ status: "pass", code: "slack-relay-token", message: `Paired as ${identity.userId} on ${identity.botName}.` });
+  checks.push(
+    identity.online
+      ? { status: "pass", code: "slack-relay-online", message: "This machine's runner is polling the relay." }
+      : { status: "warn", code: "slack-relay-online", message: "Paired, but no runner is polling from here; start `nemeda-agent slack run`." }
+  );
+
+  const { projects, issues } = buildRoutes(registry.repos, { ...registry, owner: registry.owner || identity.userId });
+  for (const issue of issues) {
+    checks.push({ status: issue.level === "error" ? "fail" : "warn", code: "slack-routes", message: issue.message });
+  }
+  checks.push(
+    projects.length
+      ? { status: "pass", code: "slack-projects", message: `${projects.length} project(s) answerable: ${projects.map((project) => project.projectId).join(", ")}.` }
+      : { status: "fail", code: "slack-projects", message: "No projects; add repository paths to the registry." }
+  );
+  for (const project of projects) {
+    const backend = project.slack.backend;
+    checks.push({
+      status: executableAvailable(backend) ? "pass" : "fail",
+      code: `slack-backend-${project.projectId}`,
+      message: executableAvailable(backend)
+        ? `${project.projectId} answers with ${backend}, which is on PATH.`
+        : `${project.projectId} is configured for ${backend}, which is not on PATH.`
+    });
+  }
+  return { checks };
+}
+
 export async function slackDoctor(environment = process.env) {
   const checks = [];
   const home = homeDirectory(environment);
   const envPath = path.join(home, ".env.local");
   const scratch = { ...environment };
   if (existsSync(envPath)) loadEnvLocal(home, scratch);
+
+  if (scratch.NEMEDA_RELAY_URL && scratch.NEMEDA_RELAY_TOKEN) {
+    return relayDoctor(scratch, environment, checks);
+  }
 
   const major = Number(process.versions.node.split(".")[0]);
   checks.push(

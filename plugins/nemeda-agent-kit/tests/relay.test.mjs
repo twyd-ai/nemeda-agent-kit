@@ -79,3 +79,12 @@ test("the Slack method whitelist covers what the runner uses and nothing dangero
     assert.ok(!ALLOWED_SLACK_METHODS.has(method), method);
   }
 });
+
+test("the Slack method whitelist is not reachable from the runner control endpoints", () => {
+  // The runner proxies Slack calls through the relay, so the whitelist is the
+  // only thing standing between a leaked runner token and the workspace.
+  for (const method of ["chat.postMessage", "chat.delete", "conversations.history"]) {
+    assert.ok(ALLOWED_SLACK_METHODS.has(method), method);
+  }
+  assert.equal(ALLOWED_SLACK_METHODS.size, 8);
+});
