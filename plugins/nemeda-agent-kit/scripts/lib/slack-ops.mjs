@@ -24,6 +24,7 @@ import {
   withSlackDefaults
 } from "./slack.mjs";
 import { readWorkspaceContext } from "./workspace.mjs";
+import { effectiveEnvironment, loadServers, migrateFromEnv, normalizeUrl, removeServer, resolveActiveServer, saveServers, serversPath, upsertServer } from "./slack-servers.mjs";
 
 const PLUGIN_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const LAUNCH_AGENT_LABEL = "io.nemeda.agent-kit.slack";
@@ -111,7 +112,7 @@ async function slackApi(token, method, body = {}) {
 // does it have projects to answer about.
 async function relayDoctor(scratch, environment, checks) {
   const relayUrl = String(scratch.NEMEDA_RELAY_URL || "").replace(/\/+$/, "");
-  checks.push({ status: "pass", code: "slack-mode", message: `Relay mode: ${relayUrl}` });
+  checks.push({ status: "pass", code: "slack-mode", message: `Relay mode: ${scratch.__name || "env"} -> ${relayUrl}` });
 
   const registry = loadRegistry(environment);
   if (registry.error) {
@@ -190,8 +191,9 @@ export async function slackDoctor(environment = process.env) {
   const scratch = { ...environment };
   if (existsSync(envPath)) loadEnvLocal(home, scratch);
 
-  if (scratch.NEMEDA_RELAY_URL && scratch.NEMEDA_RELAY_TOKEN) {
-    return relayDoctor(scratch, environment, checks);
+  const active = resolveActiveServer({ ...environment, ...scratch });
+  if (active) {
+    return relayDoctor({ ...scratch, NEMEDA_RELAY_URL: active.url, NEMEDA_RELAY_TOKEN: active.token, __name: active.name }, environment, checks);
   }
 
   const major = Number(process.versions.node.split(".")[0]);
@@ -418,7 +420,7 @@ export function updateEnvLocal(directory, values) {
 // `nemeda-agent slack join <url>` — pair this machine with the team relay.
 // Prints a short code; the person DMs it to the bot, and Slack itself proves
 // who they are. No Slack app creation, no tokens to copy.
-export async function joinRelay(relayUrl, environment = process.env) {
+export async function joinRelay(relayUrl, serverName = "", environment = process.env) {
   const url = String(relayUrl || "").replace(/\/+$/, "");
   if (!/^https?:\/\//.test(url)) throw new Error("Usage: nemeda-agent slack join <https://relay-url>");
   const started = await fetch(`${url}/pair/start`, {
@@ -438,14 +440,14 @@ export async function joinRelay(relayUrl, environment = process.env) {
     if (response.status === 410) throw new Error("El código ha caducado. Vuelve a ejecutar join.");
     const result = await response.json();
     if (result.token) {
-      const envPath = updateEnvLocal(homeDirectory(environment), {
-        NEMEDA_RELAY_URL: url,
-        NEMEDA_RELAY_TOKEN: result.token
-      });
+      const name = serverName || new URL(url).hostname.split(".")[0];
+      const state = migrateFromEnv(loadServers(environment), effectiveEnvironment(environment));
+      saveServers(upsertServer(state, name, { url, token: result.token, pairedAs: result.userId }), environment);
       return {
         userId: result.userId,
         userName: result.userName,
-        envPath,
+        server: name,
+        envPath: serversPath(environment),
         nextSteps: ["nemeda-agent slack run   (o `slack install` para dejarlo fijo)"]
       };
     }
@@ -454,9 +456,44 @@ export async function joinRelay(relayUrl, environment = process.env) {
 }
 
 export function leaveRelay(environment = process.env) {
-  const envPath = updateEnvLocal(homeDirectory(environment), { NEMEDA_RELAY_URL: "", NEMEDA_RELAY_TOKEN: "" });
+  const state = migrateFromEnv(loadServers(environment), effectiveEnvironment(environment));
+  const name = state.active;
+  if (name) saveServers(removeServer(state, name), environment);
+  updateEnvLocal(homeDirectory(environment), { NEMEDA_RELAY_URL: "", NEMEDA_RELAY_TOKEN: "" });
   return {
-    envPath,
-    note: "Token local borrado. Manda `desvincular` por DM al bot para revocarlo también en el relay."
+    note: name
+      ? `Perfil "${name}" borrado de este equipo. Manda \`desvincular\` por DM al bot para revocarlo también en el relay.`
+      : "No había ningún relay activo."
   };
+}
+
+// `slack server` — list, or switch to a named profile.
+export function listServers(environment = process.env) {
+  const state = migrateFromEnv(loadServers(environment), effectiveEnvironment(environment));
+  return {
+    active: state.active,
+    servers: Object.entries(state.servers).map(([name, entry]) => ({
+      name,
+      url: normalizeUrl(entry.url),
+      pairedAs: entry.pairedAs || "",
+      active: name === state.active
+    }))
+  };
+}
+
+export function useServer(name, environment = process.env) {
+  const state = migrateFromEnv(loadServers(environment), effectiveEnvironment(environment));
+  if (!state.servers[name]) {
+    const known = Object.keys(state.servers).join(", ") || "ninguno";
+    throw new Error(`No conozco el servidor "${name}". Tengo: ${known}. Añade uno con \`nemeda-agent slack join <url> --as <nombre>\`.`);
+  }
+  saveServers({ ...state, active: name }, environment);
+  return { active: name, url: normalizeUrl(state.servers[name].url) };
+}
+
+export function forgetServer(name, environment = process.env) {
+  const state = migrateFromEnv(loadServers(environment), effectiveEnvironment(environment));
+  if (!state.servers[name]) throw new Error(`No conozco el servidor "${name}".`);
+  saveServers(removeServer(state, name), environment);
+  return { removed: name };
 }

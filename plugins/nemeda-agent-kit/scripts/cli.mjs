@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { readFileSync } from "node:fs";
 import { setupWorkspace } from "./lib/setup.mjs";
-import { askLocally, initSlack, installLaunchAgent, joinRelay, leaveRelay, slackDoctor } from "./lib/slack-ops.mjs";
+import { askLocally, forgetServer, initSlack, installLaunchAgent, joinRelay, leaveRelay, listServers, slackDoctor, useServer } from "./lib/slack-ops.mjs";
 import { manifestPath } from "./lib/slack.mjs";
 import {
   defaultWorkspaceDirectory,
@@ -25,7 +25,9 @@ function parseArguments(argv) {
     else if (value === "--profile") options.profiles.push(rest[++index]);
     else if (value === "--workspace") options.workspace = true;
     else if (value === "--dry-run") options.dryRun = true;
-    else if (command === "slack" && ["ask", "join"].includes(options.subcommand) && !options.question) options.question = value;
+    else if (value === "--as") options.as = rest[++index];
+    else if (value === "--forget") options.forget = rest[++index];
+    else if (command === "slack" && ["ask", "join", "server"].includes(options.subcommand) && !options.question) options.question = value;
     else throw new Error(`Unknown argument: ${value}`);
   }
   return { command, options };
@@ -47,7 +49,8 @@ Usage:
   nemeda-agent doctor [--cwd PATH] [--json]
   nemeda-agent slack <init|doctor|run|install|manifest> [--json]
   nemeda-agent slack ask "question" [--cwd PATH]
-  nemeda-agent slack join <https://relay-url> | leave | relay
+  nemeda-agent slack join <https://relay-url> [--as NAME] | leave | relay
+  nemeda-agent slack server [NAME] [--forget NAME]
 
 Commands:
   init     Create missing .nemeda/agent-kit.json and AGENTS.md safely.
@@ -67,6 +70,7 @@ Commands:
              join      pair this machine with the team relay (one Slack app)
              leave     forget the relay pairing on this machine
              relay     run the team relay server (needs the Slack tokens)
+             server    list relays, or switch which one this runner uses
 `;
 }
 
@@ -84,6 +88,29 @@ function printReport(report, options, title) {
   if (report.nextSteps?.length) {
     console.log("\nNext steps:");
     for (const step of report.nextSteps) console.log(`  - ${step}`);
+  }
+}
+
+// Interactive picker for `slack server` with no argument. Falls back to a plain
+// listing when stdin is not a terminal, so scripts get output instead of a hang.
+async function promptForServer(state) {
+  for (const [index, server] of state.servers.entries()) {
+    const mark = server.active ? "*" : " ";
+    console.log(` ${mark} ${index + 1}) ${server.name.padEnd(14)} ${server.url}`);
+  }
+  if (!process.stdin.isTTY) {
+    console.log("\nElige uno con: nemeda-agent slack server <nombre>");
+    return null;
+  }
+  const { createInterface } = await import("node:readline/promises");
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    const answer = (await rl.question("\n¿A cuál te conectas? (número o nombre, Enter para dejarlo) ")).trim();
+    if (!answer) return null;
+    const byIndex = state.servers[Number(answer) - 1];
+    return byIndex ? byIndex.name : answer;
+  } finally {
+    rl.close();
   }
 }
 
@@ -124,9 +151,26 @@ async function runSlack(options) {
     return 0;
   }
   if (subcommand === "join") {
-    const result = await joinRelay(options.question);
-    console.log(`Vinculado como ${result.userName} (${result.userId}). Token guardado en ${result.envPath}.`);
+    const result = await joinRelay(options.question, options.as);
+    console.log(`Vinculado como ${result.userName} (${result.userId}) en "${result.server}". Guardado en ${result.envPath}.`);
     for (const step of result.nextSteps) console.log(`  - ${step}`);
+    return 0;
+  }
+  if (subcommand === "server") {
+    if (options.forget) {
+      console.log(`Olvidado: ${forgetServer(options.forget).removed}.`);
+      return 0;
+    }
+    const state = listServers();
+    if (state.servers.length === 0) {
+      console.log("No hay ningún relay configurado. Añade uno con `nemeda-agent slack join <url> --as <nombre>`.");
+      return 1;
+    }
+    const target = options.question || (await promptForServer(state));
+    if (!target) return 0;
+    const chosen = useServer(target);
+    console.log(`Ahora este equipo usa "${chosen.active}" (${chosen.url}).`);
+    console.log("  - Reinicia el runner para aplicarlo: launchctl kickstart -k gui/$(id -u)/io.nemeda.agent-kit.slack");
     return 0;
   }
   if (subcommand === "leave") {
