@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { readFileSync } from "node:fs";
 import { setupWorkspace } from "./lib/setup.mjs";
-import { askLocally, initSlack, installLaunchAgent, slackDoctor } from "./lib/slack-ops.mjs";
+import { askLocally, initSlack, installLaunchAgent, joinRelay, leaveRelay, slackDoctor } from "./lib/slack-ops.mjs";
 import { manifestPath } from "./lib/slack.mjs";
 import {
   defaultWorkspaceDirectory,
@@ -25,7 +25,7 @@ function parseArguments(argv) {
     else if (value === "--profile") options.profiles.push(rest[++index]);
     else if (value === "--workspace") options.workspace = true;
     else if (value === "--dry-run") options.dryRun = true;
-    else if (command === "slack" && options.subcommand === "ask" && !options.question) options.question = value;
+    else if (command === "slack" && ["ask", "join"].includes(options.subcommand) && !options.question) options.question = value;
     else throw new Error(`Unknown argument: ${value}`);
   }
   return { command, options };
@@ -47,6 +47,7 @@ Usage:
   nemeda-agent doctor [--cwd PATH] [--json]
   nemeda-agent slack <init|doctor|run|install|manifest> [--json]
   nemeda-agent slack ask "question" [--cwd PATH]
+  nemeda-agent slack join <https://relay-url> | leave | relay
 
 Commands:
   init     Create missing .nemeda/agent-kit.json and AGENTS.md safely.
@@ -63,6 +64,9 @@ Commands:
              install   install a macOS LaunchAgent so it starts at login
              manifest  print the Slack app manifest to create your own app
              ask       answer one question locally, exactly as Slack would
+             join      pair this machine with the team relay (one Slack app)
+             leave     forget the relay pairing on this machine
+             relay     run the team relay server (needs the Slack tokens)
 `;
 }
 
@@ -117,6 +121,22 @@ async function runSlack(options) {
   if (subcommand === "run") {
     const { runSlackRunner } = await import("./slack/runner.mjs");
     await runSlackRunner();
+    return 0;
+  }
+  if (subcommand === "join") {
+    const result = await joinRelay(options.question);
+    console.log(`Vinculado como ${result.userName} (${result.userId}). Token guardado en ${result.envPath}.`);
+    for (const step of result.nextSteps) console.log(`  - ${step}`);
+    return 0;
+  }
+  if (subcommand === "leave") {
+    const result = leaveRelay();
+    console.log(result.note);
+    return 0;
+  }
+  if (subcommand === "relay") {
+    const { runRelay } = await import("./slack/relay.mjs");
+    await runRelay();
     return 0;
   }
   throw new Error(`Unknown slack subcommand: ${subcommand}`);

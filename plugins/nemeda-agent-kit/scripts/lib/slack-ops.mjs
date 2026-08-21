@@ -312,3 +312,69 @@ export async function askLocally(question, cwd = process.cwd()) {
     messages: splitForSlack(toMrkdwn(answer), slack.maxAnswerChars)
   };
 }
+
+// --- relay mode -----------------------------------------------------------
+
+// Updates or appends KEY=value lines in ~/.nemeda/.env.local without touching
+// anything else in the file.
+export function updateEnvLocal(directory, values) {
+  const envPath = path.join(directory, ".env.local");
+  mkdirSync(directory, { recursive: true });
+  const lines = existsSync(envPath) ? readFileSync(envPath, "utf8").split("\n") : [];
+  for (const [key, value] of Object.entries(values)) {
+    const index = lines.findIndex((line) => line.trim().startsWith(`${key}=`));
+    if (index >= 0) lines[index] = `${key}=${value}`;
+    else {
+      if (lines.length && lines[lines.length - 1] !== "") lines.push("");
+      lines.push(`${key}=${value}`);
+    }
+  }
+  writeFileSync(envPath, `${lines.join("\n").replace(/\n+$/, "")}\n`, { mode: 0o600 });
+  return envPath;
+}
+
+// `nemeda-agent slack join <url>` — pair this machine with the team relay.
+// Prints a short code; the person DMs it to the bot, and Slack itself proves
+// who they are. No Slack app creation, no tokens to copy.
+export async function joinRelay(relayUrl, environment = process.env) {
+  const url = String(relayUrl || "").replace(/\/+$/, "");
+  if (!/^https?:\/\//.test(url)) throw new Error("Usage: nemeda-agent slack join <https://relay-url>");
+  const started = await fetch(`${url}/pair/start`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name: os.hostname() })
+  }).then((response) => response.json());
+  if (!started.code) throw new Error(`The relay did not issue a pairing code: ${JSON.stringify(started)}`);
+  console.log(`\nCódigo de vinculación: ${started.code}`);
+  console.log(`Envía este DM al bot de Slack:  vincular ${started.code}`);
+  console.log(`(caduca en ${Math.round(started.expiresInSeconds / 60)} minutos; esperando...)\n`);
+  const deadline = Date.now() + started.expiresInSeconds * 1000;
+  while (Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 3000));
+    const response = await fetch(`${url}/pair/wait?code=${encodeURIComponent(started.code)}`);
+    if (response.status === 204) continue;
+    if (response.status === 410) throw new Error("El código ha caducado. Vuelve a ejecutar join.");
+    const result = await response.json();
+    if (result.token) {
+      const envPath = updateEnvLocal(homeDirectory(environment), {
+        NEMEDA_RELAY_URL: url,
+        NEMEDA_RELAY_TOKEN: result.token
+      });
+      return {
+        userId: result.userId,
+        userName: result.userName,
+        envPath,
+        nextSteps: ["nemeda-agent slack run   (o `slack install` para dejarlo fijo)"]
+      };
+    }
+  }
+  throw new Error("Nadie reclamó el código a tiempo. Vuelve a ejecutar join.");
+}
+
+export function leaveRelay(environment = process.env) {
+  const envPath = updateEnvLocal(homeDirectory(environment), { NEMEDA_RELAY_URL: "", NEMEDA_RELAY_TOKEN: "" });
+  return {
+    envPath,
+    note: "Token local borrado. Manda `desvincular` por DM al bot para revocarlo también en el relay."
+  };
+}
