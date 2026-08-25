@@ -17,16 +17,34 @@ test("portable and host manifests share the same identity", () => {
   const portable = readJson(path.join(pluginRoot, "plugin.json"));
   const codex = readJson(path.join(pluginRoot, ".codex-plugin", "plugin.json"));
   const claude = readJson(path.join(pluginRoot, ".claude-plugin", "plugin.json"));
+  const cursor = readJson(path.join(pluginRoot, ".cursor-plugin", "plugin.json"));
   const packageManifest = readJson(path.join(pluginRoot, "package.json"));
   const claudeMarketplace = readJson(path.join(repositoryRoot, ".claude-plugin", "marketplace.json"));
+  const cursorMarketplace = readJson(path.join(repositoryRoot, ".cursor-plugin", "marketplace.json"));
 
   assert.equal(portable.name, "nemeda-agent-kit");
   assert.equal(codex.name, portable.name);
   assert.equal(claude.name, portable.name);
+  assert.equal(cursor.name, portable.name);
   assert.equal(codex.version, portable.version);
   assert.equal(claude.version, portable.version);
+  assert.equal(cursor.version, portable.version);
   assert.equal(packageManifest.version, portable.version);
   assert.equal(claudeMarketplace.plugins[0].version, portable.version);
+  assert.equal(cursorMarketplace.plugins[0].version, portable.version);
+});
+
+test("the cursor manifest reuses the portable components and its rule stays generic", () => {
+  const cursor = readJson(path.join(pluginRoot, ".cursor-plugin", "plugin.json"));
+  assert.equal(cursor.skills, "skills/");
+  assert.equal(cursor.mcpServers, "mcp.json");
+  assert.equal(cursor.rules, "rules/");
+  const rule = readFileSync(path.join(pluginRoot, "rules", "workspace-context.mdc"), "utf8");
+  assert.match(rule, /alwaysApply: true/);
+  assert.match(rule, /workspace_context/);
+  assert.match(rule, /If there is no `.nemeda\/agent-kit.json`/);
+  // The rule ships to every Cursor user, so it must carry no machine paths.
+  assert.ok(!rule.includes("/Users/") && !rule.includes("C:\\"));
 });
 
 test("host manifests declare hooks only where the host requires them", () => {

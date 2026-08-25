@@ -74,12 +74,14 @@ the repository supplies thin adapters:
 - `.codex-plugin/plugin.json` and `.agents/plugins/marketplace.json`;
 - `.claude-plugin/plugin.json` and `.claude-plugin/marketplace.json`.
 
-Cursor has no plugin system, so its adapter is generated per machine instead of
-committed: `nemeda-agent cursor init` writes `.cursor/mcp.json` (the same
-read-only MCP server), an always-on rule pointing at the MCP context and
-`AGENTS.md`, and slash-command shims that reference the plugin's skills by
-path. Shared Cursor commands come from the same Drive `commands` folder the
-other hosts link.
+Cursor supports the Agent Plugins standard directly, so the portable core
+installs there unchanged; the thin adapters are `.cursor-plugin/plugin.json`
+and `.cursor-plugin/marketplace.json`, plus a bundled always-on rule
+(`rules/workspace-context.mdc`) that activates only inside kit-configured
+repositories — rules being a Cursor-only component the portable format cannot
+carry. Shared Cursor commands come from the same Drive `commands` folder the
+other hosts link. For machines that cannot install the plugin,
+`nemeda-agent cursor init` generates the equivalent wiring per workspace.
 
 The adapters point at the same skills, scripts, and MCP implementation. They must not
 contain forked copies of methodology.

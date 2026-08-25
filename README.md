@@ -56,10 +56,10 @@ project instructions stay in `AGENTS.md`.
   their machine and only the owner and their declared guests are answered.
   Read-only by construction, and `slack ask` replays the whole path locally so
   the voice can be tuned before any Slack app exists.
-- Native manifests and marketplaces for Codex and Claude Code, plus a generated
-  Cursor adapter (`nemeda-agent cursor init`): MCP context, an always-on rule,
-  and a slash command per kit skill — same context, same conventions, third
-  host.
+- Native manifests and marketplaces for Claude Code, Codex, and Cursor —
+  Cursor installs the portable core directly (Agent Plugins standard), with a
+  thin adapter adding an always-on workspace rule; `nemeda-agent cursor init`
+  covers machines that cannot install the plugin.
 - A portable Agent Plugins `plugin.json` + `mcp.json` core.
 - A versioned JSON Schema and sanitized Milence/Scharlab examples.
 
@@ -73,6 +73,13 @@ codex plugin marketplace add marcnaa/nemeda-agent-kit
 
 Open `/plugins`, select **Nemeda Agent Kit**, install `nemeda-agent-kit`, then
 start a new session.
+
+### Cursor
+
+Install from a team marketplace (**Dashboard → Plugins → Import from Repo**
+with this repository) or clone it under `~/.cursor/plugins/local`. The plugin
+loads the same skills and MCP context as the other hosts; the bundled rule
+activates only inside kit-configured repositories.
 
 ### Claude Code
 

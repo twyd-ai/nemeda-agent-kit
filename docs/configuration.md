@@ -142,23 +142,28 @@ macOS, Windows (junctions, no admin needed), and Linux (rclone/gvfs).
 
 ## Cursor
 
-Cursor has no plugin system, but it reads `AGENTS.md` natively, loads project
-rules from `.cursor/rules/`, commands from `.cursor/commands/`, and MCP servers
-from `.cursor/mcp.json`. The kit generates that adapter as machine-local
-assembly:
+Cursor supports the Agent Plugins standard the kit's portable core follows, so
+the **plugin installs natively**: skills and the workspace-context MCP server
+load exactly as they do in Claude Code and Codex, and the repository carries
+the thin Cursor adapters (`.cursor-plugin/marketplace.json` at the root,
+`.cursor-plugin/plugin.json` plus an always-on rule in the plugin) mirroring
+the Claude and Codex ones. Install it from the Cursor marketplace, a team
+marketplace (Dashboard → Plugins → Import from Repo), or a local checkout
+under `~/.cursor/plugins/local`. The rule activates only in repositories that
+contain `.nemeda/agent-kit.json` and points Cursor at the MCP context and
+`AGENTS.md`; shared team commands reach Cursor through the `.cursor/commands`
+Drive link like every other host.
+
+For a machine that cannot install the plugin, the same wiring can be generated
+per workspace instead:
 
 ```bash
-nemeda-agent cursor init     # or just `nemeda-agent setup` with Cursor installed
+nemeda-agent cursor init     # or `nemeda-agent setup` with Cursor installed
 ```
 
-creates `.cursor/mcp.json` (the read-only workspace-context server for this
-checkout), an always-on rule pointing Cursor at the MCP context and `AGENTS.md`,
-and one slash command per kit skill (`/workspace-doctor`, `/workspace-create`,
-…) that references the plugin's `SKILL.md` rather than copying it, so the
-methodology keeps a single source. Generated files contain machine-local
-absolute paths, so setup gitignores them; each teammate generates their own.
-If `.cursor/commands` is declared as a Drive link, the shared folder wins and
-no shims are written.
+writes `.cursor/mcp.json`, the rule, and one slash command per kit skill,
+all referencing this machine's checkout (and therefore gitignored by setup).
+Skip it when the plugin is installed — the plugin already provides all three.
 
 ## Airtable (`airtable`)
 

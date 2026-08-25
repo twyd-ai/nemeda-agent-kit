@@ -1,0 +1,20 @@
+---
+description: Load Nemeda Agent Kit workspace context when the repository is configured with it
+alwaysApply: true
+---
+
+If the current repository (or a parent directory) contains
+`.nemeda/agent-kit.json`, it is a Nemeda Agent Kit workspace:
+
+- At the start of a session, call the `workspace_context` tool of the
+  `workspace-context` MCP server, passing the workspace root as `cwd`. It
+  returns the project identity, repository roles, tool requirements, the
+  shared-drive filing map, and the project instructions. Treat that context as
+  authoritative.
+- `AGENTS.md` holds the durable project rules; follow it.
+- Shared documents live behind the Drive symlinks (`docs/`, `config/`). File
+  new documents into the declared docs taxonomy; never leave files loose at
+  the drive root.
+- `nemeda-agent doctor` diagnoses the workspace when something is missing.
+
+If there is no `.nemeda/agent-kit.json`, this rule does not apply; ignore it.
