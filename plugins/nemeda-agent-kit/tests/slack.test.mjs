@@ -7,7 +7,9 @@ import {
   buildBackendCommand,
   buildRoutes,
   classifyEvent,
+  dmSessionScope,
   isPurgeCommand,
+  isResetCommand,
   loadRegistry,
   parseBackendOutput,
   rateLimit,
@@ -233,5 +235,24 @@ test("isPurgeCommand matches short imperatives and rejects questions and prose",
     ""
   ]) {
     assert.equal(isPurgeCommand(text), false, text || "(empty)");
+  }
+});
+
+test("dmSessionScope rolls over daily and honours an explicit reset", () => {
+  const monday = new Date("2026-08-24T09:00:00Z");
+  const laterMonday = new Date("2026-08-24T23:30:00Z");
+  const tuesday = new Date("2026-08-25T08:00:00Z");
+  assert.equal(dmSessionScope("demo", { now: monday }), dmSessionScope("demo", { now: laterMonday }));
+  assert.notEqual(dmSessionScope("demo", { now: monday }), dmSessionScope("demo", { now: tuesday }));
+  assert.notEqual(dmSessionScope("demo", { now: monday }), dmSessionScope("demo", { now: monday, reset: 1 }));
+  assert.notEqual(dmSessionScope("demo", { now: monday }), dmSessionScope("other", { now: monday }));
+});
+
+test("isResetCommand matches short imperatives, not questions about resetting", () => {
+  for (const text of ["empieza de nuevo", "start over", "Reset", "nueva conversación", "olvida"]) {
+    assert.equal(isResetCommand(text), true, text);
+  }
+  for (const text of ["¿cómo reinicio el runner?", "reset the relay when the tunnel drops and tell me what happens", ""]) {
+    assert.equal(isResetCommand(text), false, text || "(empty)");
   }
 });

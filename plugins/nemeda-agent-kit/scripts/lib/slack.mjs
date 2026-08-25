@@ -249,6 +249,15 @@ export function isPurgeCommand(text) {
   return /^(?:borra|borrar|elimina|eliminar|limpia|limpiar|delete|clear|clean)\b[\s\S]*\b(?:mensajes|messages|chat|historial|history)\b/i.test(clean);
 }
 
+// "empieza de nuevo" / "start over" drops the DM's accumulated context without
+// touching any messages. Same shape as isPurgeCommand: short imperatives only,
+// so a question about resetting something still reaches the backend.
+export function isResetCommand(text) {
+  const clean = String(text || "").trim();
+  if (!clean || clean.length > 60 || clean.includes("?")) return false;
+  return /^(?:empieza de nuevo|empecemos de nuevo|reinicia|reiniciar|olvida|start over|reset|new conversation|nueva conversaci[oó]n)\b/i.test(clean);
+}
+
 // --- rate limiting --------------------------------------------------------
 
 export function rateLimit(state, key, max, now = Date.now()) {
@@ -306,6 +315,16 @@ export function splitForSlack(text, maxChars = SLACK_DEFAULTS.maxAnswerChars) {
 }
 
 // --- backend invocation ---------------------------------------------------
+
+// A channel thread is naturally finite, but a DM is not: treated as one endless
+// conversation it grows without bound, and every question replays the whole
+// history — measured at 134 KB and minutes per answer after a few days. So a DM
+// session is scoped to a day (plus a reset counter), which keeps context for as
+// long as it is useful and starts clean afterwards.
+export function dmSessionScope(projectId, { now = new Date(), reset = 0 } = {}) {
+  const day = now.toISOString().slice(0, 10);
+  return `dm:${projectId}:${day}${reset ? `:r${reset}` : ""}`;
+}
 
 // One deterministic session per Slack thread, so a thread is a conversation
 // and follow-ups keep their context without anyone repeating themselves.

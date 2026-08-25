@@ -18,7 +18,9 @@ import {
   buildBackendCommand,
   buildRoutes,
   classifyEvent,
+  dmSessionScope,
   isPurgeCommand,
+  isResetCommand,
   resolveDmRoute,
   sessionRetryMode,
   homeDirectory,
@@ -355,6 +357,13 @@ class Runner {
     if (event.bot_id || event.user === this.botUserId || event.subtype || !event.user || !stripMentions(event.text)) return;
     const say = (text) => this.try("chat.postMessage", { channel: event.channel, text });
 
+    if (isResetCommand(stripMentions(event.text))) {
+      const key = `${event.channel}:reset`;
+      this.dmProjects[key] = (this.dmProjects[key] || 0) + 1;
+      writeState(this.stateFile("dm"), this.dmProjects, this.environment);
+      await say("Done — starting fresh. I have dropped the context of this conversation.");
+      return;
+    }
     if (isPurgeCommand(stripMentions(event.text))) {
       if (this.isOwner(event.user)) await this.runPurge(event);
       else await say("Only the owner of this agent can ask it to delete messages.");
@@ -425,7 +434,9 @@ class Runner {
 
     // In a DM the whole conversation is the session (scoped per project); in a
     // channel each thread is. Both resume across runner restarts.
-    const sessionScope = decision.isDirectMessage ? `dm:${route.projectId}` : decision.threadTs;
+    const sessionScope = decision.isDirectMessage
+      ? dmSessionScope(route.projectId, { reset: this.dmProjects[`${event.channel}:reset`] || 0 })
+      : decision.threadTs;
     const sessionId = threadSessionId(this.teamId, event.channel, sessionScope);
     const threadKey = `${event.channel}:${sessionScope}`;
     const cwd = answerRoot(route, this.environment);
