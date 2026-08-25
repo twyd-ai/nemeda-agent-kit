@@ -1,0 +1,12 @@
+{
+  "name": "nemeda-agent-kit",
+  "version": "0.3.0",
+  "description": "Portable methodology, tools, and repository context for AI coding agents.",
+  "author": { "name": "Nemeda" },
+  "repository": "https://github.com/marcnaa/nemeda-agent-kit",
+  "license": "Apache-2.0",
+  "keywords": ["agents", "mcp", "workspace", "methodology"],
+  "skills": "skills/",
+  "rules": "rules/",
+  "mcpServers": "mcp.json"
+}

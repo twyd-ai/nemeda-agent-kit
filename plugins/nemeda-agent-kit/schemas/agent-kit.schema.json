@@ -115,6 +115,14 @@
             "type": "string",
             "minLength": 1
           }
+        },
+        "scaffold": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "Shared-drive-relative folders that `nemeda-agent setup` creates when missing (e.g. the docs taxonomy: docs/meets, docs/transcriptions). Keeps every project's Drive structure consistent."
         }
       }
     },

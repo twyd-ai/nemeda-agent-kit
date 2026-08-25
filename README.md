@@ -2,8 +2,8 @@
 
 Portable methodology, tools, and repository context for AI coding agents.
 
-Nemeda Agent Kit gives Codex, Claude Code, and Agent Plugins-compatible hosts the
-same operational baseline without copying skills or tool configuration into every
+Nemeda Agent Kit gives Claude Code, Codex, Cursor, and Agent Plugins-compatible
+hosts the same operational baseline without copying skills or tool configuration into every
 project. A small `.nemeda/agent-kit.json` file identifies each repository; normal
 project instructions stay in `AGENTS.md`.
 
@@ -19,11 +19,21 @@ project instructions stay in `AGENTS.md`.
   checks.
 - A zero-dependency CLI: `nemeda-agent init`, `setup`, `context`, `doctor`, and
   `slack`.
-- **Shared-workspace assembly** (`nemeda-agent setup`): Google Drive symlinks
-  (`docs/`, `config/`, `.claude/skills`, `.claude/commands`), declared code
-  repository clones, an `.env.local` template, and the matching `.gitignore`
-  entries — all declared in `.nemeda/agent-kit.json` instead of per-project
-  shell scripts.
+- **Shared-workspace assembly and provisioning** (`nemeda-agent setup`): the
+  Google Drive structure itself (folders created when missing, each carrying a
+  README with its filing conventions, plus a declared docs taxonomy), the
+  workspace symlinks (`docs/`, `config/`, skills and commands for both Claude
+  and Codex; directory junctions on Windows), declared code repository clones,
+  an `.env.local` template, and the matching `.gitignore` entries — all
+  declared in `.nemeda/agent-kit.json` instead of per-project shell scripts.
+  Drive detection works on macOS, Windows, and Linux
+  ([drive-setup.md](docs/drive-setup.md)).
+- **Project provisioning end to end**: the `workspace-create` skill walks a new
+  project from nothing to a replicable workspace — Drive structure, workspace
+  repo, code repos, and a canonical Airtable base created through the API
+  (`nemeda-agent airtable init`) with the exact tables and fields the hooks
+  expect. A teammate replicates it with clone + `nemeda-agent setup`, and every
+  AI session receives the same project map and filing conventions.
 - **Airtable automations as plugin hooks**, parameterized by the same config:
   - A session-start reconciler reads open and merged PRs directly from GitHub
     (via `gh pr list`) and moves tasks with a matching `Airtable: recXXX` line
@@ -46,7 +56,10 @@ project instructions stay in `AGENTS.md`.
   their machine and only the owner and their declared guests are answered.
   Read-only by construction, and `slack ask` replays the whole path locally so
   the voice can be tuned before any Slack app exists.
-- Native manifests and marketplaces for Codex and Claude Code.
+- Native manifests and marketplaces for Claude Code, Codex, and Cursor —
+  Cursor installs the portable core directly (Agent Plugins standard), with a
+  thin adapter adding an always-on workspace rule; `nemeda-agent cursor init`
+  covers machines that cannot install the plugin.
 - A portable Agent Plugins `plugin.json` + `mcp.json` core.
 - A versioned JSON Schema and sanitized Milence/Scharlab examples.
 
@@ -60,6 +73,13 @@ codex plugin marketplace add marcnaa/nemeda-agent-kit
 
 Open `/plugins`, select **Nemeda Agent Kit**, install `nemeda-agent-kit`, then
 start a new session.
+
+### Cursor
+
+Install from a team marketplace (**Dashboard → Plugins → Import from Repo**
+with this repository) or clone it under `~/.cursor/plugins/local`. The plugin
+loads the same skills and MCP context as the other hosts; the bundled rule
+activates only inside kit-configured repositories.
 
 ### Claude Code
 

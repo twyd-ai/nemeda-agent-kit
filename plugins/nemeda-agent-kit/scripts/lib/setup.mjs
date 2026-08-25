@@ -8,6 +8,7 @@ import { appendFileSync, existsSync, lstatSync, mkdirSync, readFileSync, readlin
 import path from "node:path";
 import { planDriveLinks } from "./drive.mjs";
 import { ENV_LOCAL_NAME } from "./env.mjs";
+import { setupCursor } from "./cursor.mjs";
 import { readWorkspaceContext, validateConfig } from "./workspace.mjs";
 
 const GITIGNORE_MARKER = "# nemeda-agent-kit: machine-local paths (managed by `nemeda-agent setup`)";
@@ -25,6 +26,40 @@ function action(kind, status, message) {
   return { kind, status, message };
 }
 
+// Conventions travel with the folders: every provisioned Drive folder gets a
+// short README saying what belongs in it, so the structure explains itself to
+// every teammate and every AI, on every machine, and does not degrade into
+// loose files at the root.
+const DRIVE_FOLDER_READMES = {
+  docs: "# docs\n\nProject documentation, shared by the whole team.\n\nFile things in the matching subfolder (meeting notes in `meets/`, transcripts in `transcriptions/`, analysis in `analisis/`). Create a new subfolder rather than leaving files loose in this root.\n",
+  config: "# config\n\nShared, non-secret configuration: environment templates, service settings, VPN profiles.\n\nSecrets never go here — they live in each person's local `.env` files.\n",
+  skills: "# skills\n\nShared agent skills for this project. Every teammate's AI loads these through the workspace symlinks, so a skill improved here improves for everyone.\n",
+  commands: "# commands\n\nShared slash commands for this project, loaded by every teammate's AI through the workspace symlinks.\n"
+};
+
+function provisionDriveFolder(target, relativePath, actions, dryRun, kind) {
+  if (existsSync(target)) {
+    actions.push(action(kind, "kept", `${relativePath}/ already exists on the shared drive.`));
+    return;
+  }
+  if (dryRun) {
+    actions.push(action(kind, "planned", `create ${relativePath}/ on the shared drive`));
+    return;
+  }
+  mkdirSync(target, { recursive: true });
+  const readme = DRIVE_FOLDER_READMES[path.basename(relativePath)];
+  if (readme && !existsSync(path.join(target, "README.md"))) {
+    writeFileSync(path.join(target, "README.md"), readme);
+  }
+  actions.push(action(kind, "created", `${relativePath}/ created on the shared drive.`));
+}
+
+function createLink(target, linkPath) {
+  // Windows needs no privileges for directory junctions, unlike symlinks,
+  // and Node falls back transparently on other platforms.
+  symlinkSync(target, linkPath, process.platform === "win32" ? "junction" : null);
+}
+
 function setupDriveLinks(root, driveConfig, actions, dryRun, environment) {
   const plan = planDriveLinks(root, driveConfig, environment);
   if (plan.error) {
@@ -33,6 +68,9 @@ function setupDriveLinks(root, driveConfig, actions, dryRun, environment) {
   }
   actions.push(action("drive", "ok", `Shared drive found at ${plan.drivePath}.`));
   for (const link of plan.links) {
+    // The drive-side folder is provisioned, not required: a brand-new shared
+    // drive starts empty and setup builds the canonical structure in it.
+    provisionDriveFolder(link.target, path.relative(plan.drivePath, link.target), actions, dryRun, "drive-folder");
     let linkStat = null;
     try {
       linkStat = lstatSync(link.linkPath);
@@ -43,15 +81,18 @@ function setupDriveLinks(root, driveConfig, actions, dryRun, environment) {
       actions.push(action("link", "kept", `${link.relativeLinkPath} already links to ${readlinkSafe(link.linkPath)}.`));
     } else if (linkStat) {
       actions.push(action("link", "conflict", `${link.relativeLinkPath} exists and is not a symlink; resolve it by hand (move its content to Drive?).`));
-    } else if (!existsSync(link.target)) {
-      actions.push(action("link", "error", `${link.relativeLinkPath}: shared-drive folder is missing: ${link.target}.`));
     } else if (dryRun) {
       actions.push(action("link", "planned", `${link.relativeLinkPath} -> ${link.target}`));
+    } else if (!existsSync(link.target)) {
+      actions.push(action("link", "error", `${link.relativeLinkPath}: shared-drive folder is missing: ${link.target}.`));
     } else {
       mkdirSync(path.dirname(link.linkPath), { recursive: true });
-      symlinkSync(link.target, link.linkPath);
+      createLink(link.target, link.linkPath);
       actions.push(action("link", "created", `${link.relativeLinkPath} -> ${link.target}`));
     }
+  }
+  for (const folder of plan.scaffold) {
+    provisionDriveFolder(folder.target, folder.relativePath, actions, dryRun, "scaffold");
   }
 }
 
@@ -135,11 +176,23 @@ export function requiredGitignoreEntries(config) {
   return [...entries];
 }
 
-function setupGitignore(root, config, actions, dryRun) {
+function executableOnPath(name) {
+  try {
+    execFileSync(process.platform === "win32" ? "where" : "command", process.platform === "win32" ? [name] : ["-v", name], {
+      stdio: "ignore",
+      shell: process.platform !== "win32"
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function setupGitignore(root, config, actions, dryRun, extraEntries = []) {
   const gitignorePath = path.join(root, ".gitignore");
   const existing = existsSync(gitignorePath) ? readFileSync(gitignorePath, "utf8") : "";
   const existingLines = new Set(existing.split("\n").map((line) => line.trim()));
-  const missing = requiredGitignoreEntries(config).filter((entry) => !existingLines.has(entry) && !existingLines.has(entry.replace(/\/$/, "")));
+  const missing = [...requiredGitignoreEntries(config), ...extraEntries].filter((entry) => !existingLines.has(entry) && !existingLines.has(entry.replace(/\/$/, "")));
   if (missing.length === 0) {
     actions.push(action("gitignore", "kept", ".gitignore already covers the machine-local paths."));
     return;
@@ -169,7 +222,15 @@ export function setupWorkspace(start, options = {}) {
   if (config.drive) setupDriveLinks(context.root, config.drive, actions, dryRun, environment);
   if (config.workspace?.repositories?.length) setupRepositories(context.root, config.workspace.repositories, actions, dryRun);
   if (config.airtable) setupEnvLocal(context.root, actions, dryRun);
-  setupGitignore(context.root, config, actions, dryRun);
+  // Host parity: when Cursor is on this machine (or the caller insists), the
+  // adapter is generated alongside the rest of the machine-local assembly.
+  let cursorIgnores = [];
+  if (options.cursor || executableOnPath("cursor")) {
+    const cursor = setupCursor(context.root, config, { dryRun });
+    actions.push(...cursor.actions);
+    cursorIgnores = cursor.ignores;
+  }
+  setupGitignore(context.root, config, actions, dryRun, cursorIgnores);
 
   const nextSteps = [];
   if (config.airtable) {
