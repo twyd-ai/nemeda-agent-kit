@@ -42,8 +42,9 @@ Wait for confirmation that the drive exists and Drive for desktop shows it.
    with the project id and name.
 2. Extend `.nemeda/agent-kit.json` with:
    - `drive`: `sharedDrive` plus the canonical links — `docs`, `config`,
-     `.claude/skills` and `.agents/skills` → `skills`, `.claude/commands` and
-     `.agents/commands` → `commands` (both hosts, same shared content);
+     `.claude/skills` and `.agents/skills` → `skills`, and `.claude/commands`,
+     `.agents/commands` and `.cursor/commands` → `commands` (Claude, Codex,
+     and Cursor all load the same shared content);
    - `drive.scaffold`: the docs taxonomy. Default:
      `docs/meetings`, `docs/transcripts`, `docs/plans`, `docs/analysis`,
      `docs/api` — adapt names to the team's language and drop what does not

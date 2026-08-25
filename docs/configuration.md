@@ -120,14 +120,17 @@ travel with the structure to every teammate and every AI:
     ".claude/skills": "skills",
     ".claude/commands": "commands",
     ".agents/skills": "skills",
-    ".agents/commands": "commands"
+    ".agents/commands": "commands",
+    ".cursor/commands": "commands"
   },
   "scaffold": ["docs/meetings", "docs/transcripts", "docs/plans", "docs/analysis"]
 }
 ```
 
-Linking both `.claude/` and `.agents/` to the same Drive folders gives Claude
-Code and Codex users identical shared skills and commands. The `scaffold` list
+Linking `.claude/`, `.agents/`, and `.cursor/` to the same Drive folders gives
+Claude Code, Codex, and Cursor users identical shared skills and commands
+(Cursor loads commands but not skills; its users reach the kit's skills through
+generated slash commands instead — see below). The `scaffold` list
 is the project's docs taxonomy: setup creates it, doctor checks it, and the
 session context tells every AI to file documents into it rather than leaving
 files loose at the drive root.
@@ -136,6 +139,26 @@ Creating the **shared drive itself** needs the Google Drive UI (Workspace
 account); everything inside it is automated. Platform notes for the desktop
 client are in [drive-setup.md](drive-setup.md) — the kit detects mounts on
 macOS, Windows (junctions, no admin needed), and Linux (rclone/gvfs).
+
+## Cursor
+
+Cursor has no plugin system, but it reads `AGENTS.md` natively, loads project
+rules from `.cursor/rules/`, commands from `.cursor/commands/`, and MCP servers
+from `.cursor/mcp.json`. The kit generates that adapter as machine-local
+assembly:
+
+```bash
+nemeda-agent cursor init     # or just `nemeda-agent setup` with Cursor installed
+```
+
+creates `.cursor/mcp.json` (the read-only workspace-context server for this
+checkout), an always-on rule pointing Cursor at the MCP context and `AGENTS.md`,
+and one slash command per kit skill (`/workspace-doctor`, `/workspace-create`,
+…) that references the plugin's `SKILL.md` rather than copying it, so the
+methodology keeps a single source. Generated files contain machine-local
+absolute paths, so setup gitignores them; each teammate generates their own.
+If `.cursor/commands` is declared as a Drive link, the shared folder wins and
+no shims are written.
 
 ## Airtable (`airtable`)
 

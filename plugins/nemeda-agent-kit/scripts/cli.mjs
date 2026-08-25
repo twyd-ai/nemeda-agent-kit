@@ -14,7 +14,7 @@ import {
 function parseArguments(argv) {
   const [command = "help", ...rest] = argv;
   const options = { profiles: [] };
-  if (["slack", "airtable"].includes(command) && rest[0] && !rest[0].startsWith("-")) options.subcommand = rest.shift();
+  if (["slack", "airtable", "cursor"].includes(command) && rest[0] && !rest[0].startsWith("-")) options.subcommand = rest.shift();
   for (let index = 0; index < rest.length; index += 1) {
     const value = rest[index];
     if (value === "--json") options.json = true;
@@ -51,6 +51,7 @@ Usage:
   nemeda-agent context [--cwd PATH] [--json]
   nemeda-agent doctor [--cwd PATH] [--json]
   nemeda-agent airtable init --name NAME --workspace-id wspXXX [--json]
+  nemeda-agent cursor init [--cwd PATH] [--dry-run] [--json]
   nemeda-agent slack <init|doctor|run|install|manifest> [--json]
   nemeda-agent slack ask "question" [--cwd PATH]
   nemeda-agent slack join <https://relay-url> [--as NAME] | leave | relay
@@ -65,6 +66,10 @@ Commands:
            never overwrites existing files.
   context  Show the normalized repository context.
   doctor   Run read-only configuration, Drive, Airtable, and host diagnostics.
+  cursor   Generate the machine-local Cursor adapter for this workspace:
+           .cursor/mcp.json (workspace-context MCP), an always-on rule, and a
+           slash command per kit skill. Also runs automatically inside
+           \`setup\` when Cursor is installed. Generated paths are gitignored.
   airtable Provision the canonical project base (Backlog, Team, Knowledge Log)
            through the Airtable API and print the config snippet to paste into
            .nemeda/agent-kit.json. Reads AIRTABLE_API_KEY from the environment
@@ -121,6 +126,22 @@ async function promptForServer(state) {
   } finally {
     rl.close();
   }
+}
+
+async function runCursor(options) {
+  if (options.subcommand && options.subcommand !== "init") throw new Error("Unknown cursor subcommand; use: nemeda-agent cursor init");
+  const { setupCursor } = await import("./lib/cursor.mjs");
+  const context = readWorkspaceContext(options.cwd || defaultWorkspaceDirectory());
+  if (context.mode !== "configured") throw new Error("No .nemeda/agent-kit.json found; run `nemeda-agent init` first.");
+  const result = setupCursor(context.root, context.config, { dryRun: Boolean(options.dryRun) });
+  if (options.json) {
+    print(result, true);
+    return 0;
+  }
+  console.log(`Cursor adapter${options.dryRun ? " (dry run)" : ""} at ${context.root}`);
+  for (const entry of result.actions) console.log(`[${entry.status.toUpperCase()}] ${entry.kind}: ${entry.message}`);
+  console.log("Run `nemeda-agent setup` to add the generated paths to .gitignore, and restart Cursor.");
+  return 0;
 }
 
 async function runAirtable(options) {
@@ -252,6 +273,12 @@ export function run(argv = process.argv.slice(2)) {
         }
       }
       return report.actions.some((entry) => entry.status === "error") ? 1 : 0;
+    }
+    if (command === "cursor") {
+      return runCursor(options).catch((error) => {
+        console.error(`nemeda-agent: ${error instanceof Error ? error.message : String(error)}`);
+        return 2;
+      });
     }
     if (command === "airtable") {
       return runAirtable(options).catch((error) => {

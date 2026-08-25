@@ -8,6 +8,7 @@ import { appendFileSync, existsSync, lstatSync, mkdirSync, readFileSync, readlin
 import path from "node:path";
 import { planDriveLinks } from "./drive.mjs";
 import { ENV_LOCAL_NAME } from "./env.mjs";
+import { setupCursor } from "./cursor.mjs";
 import { readWorkspaceContext, validateConfig } from "./workspace.mjs";
 
 const GITIGNORE_MARKER = "# nemeda-agent-kit: machine-local paths (managed by `nemeda-agent setup`)";
@@ -175,11 +176,23 @@ export function requiredGitignoreEntries(config) {
   return [...entries];
 }
 
-function setupGitignore(root, config, actions, dryRun) {
+function executableOnPath(name) {
+  try {
+    execFileSync(process.platform === "win32" ? "where" : "command", process.platform === "win32" ? [name] : ["-v", name], {
+      stdio: "ignore",
+      shell: process.platform !== "win32"
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function setupGitignore(root, config, actions, dryRun, extraEntries = []) {
   const gitignorePath = path.join(root, ".gitignore");
   const existing = existsSync(gitignorePath) ? readFileSync(gitignorePath, "utf8") : "";
   const existingLines = new Set(existing.split("\n").map((line) => line.trim()));
-  const missing = requiredGitignoreEntries(config).filter((entry) => !existingLines.has(entry) && !existingLines.has(entry.replace(/\/$/, "")));
+  const missing = [...requiredGitignoreEntries(config), ...extraEntries].filter((entry) => !existingLines.has(entry) && !existingLines.has(entry.replace(/\/$/, "")));
   if (missing.length === 0) {
     actions.push(action("gitignore", "kept", ".gitignore already covers the machine-local paths."));
     return;
@@ -209,7 +222,15 @@ export function setupWorkspace(start, options = {}) {
   if (config.drive) setupDriveLinks(context.root, config.drive, actions, dryRun, environment);
   if (config.workspace?.repositories?.length) setupRepositories(context.root, config.workspace.repositories, actions, dryRun);
   if (config.airtable) setupEnvLocal(context.root, actions, dryRun);
-  setupGitignore(context.root, config, actions, dryRun);
+  // Host parity: when Cursor is on this machine (or the caller insists), the
+  // adapter is generated alongside the rest of the machine-local assembly.
+  let cursorIgnores = [];
+  if (options.cursor || executableOnPath("cursor")) {
+    const cursor = setupCursor(context.root, config, { dryRun });
+    actions.push(...cursor.actions);
+    cursorIgnores = cursor.ignores;
+  }
+  setupGitignore(context.root, config, actions, dryRun, cursorIgnores);
 
   const nextSteps = [];
   if (config.airtable) {

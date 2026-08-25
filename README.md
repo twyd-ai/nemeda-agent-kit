@@ -2,8 +2,8 @@
 
 Portable methodology, tools, and repository context for AI coding agents.
 
-Nemeda Agent Kit gives Codex, Claude Code, and Agent Plugins-compatible hosts the
-same operational baseline without copying skills or tool configuration into every
+Nemeda Agent Kit gives Claude Code, Codex, Cursor, and Agent Plugins-compatible
+hosts the same operational baseline without copying skills or tool configuration into every
 project. A small `.nemeda/agent-kit.json` file identifies each repository; normal
 project instructions stay in `AGENTS.md`.
 
@@ -56,7 +56,10 @@ project instructions stay in `AGENTS.md`.
   their machine and only the owner and their declared guests are answered.
   Read-only by construction, and `slack ask` replays the whole path locally so
   the voice can be tuned before any Slack app exists.
-- Native manifests and marketplaces for Codex and Claude Code.
+- Native manifests and marketplaces for Codex and Claude Code, plus a generated
+  Cursor adapter (`nemeda-agent cursor init`): MCP context, an always-on rule,
+  and a slash command per kit skill — same context, same conventions, third
+  host.
 - A portable Agent Plugins `plugin.json` + `mcp.json` core.
 - A versioned JSON Schema and sanitized Milence/Scharlab examples.
 

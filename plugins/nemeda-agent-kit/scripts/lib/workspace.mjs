@@ -514,11 +514,14 @@ export function workspaceDoctor(start = defaultWorkspaceDirectory()) {
         checks.push({ status: "warn", code: "symlinked-skills", message: `${relative} is symlinked; prefer plugin distribution.` });
       }
     }
+    if (executableAvailable("cursor") && !existsSync(path.join(context.root, ".cursor", "mcp.json"))) {
+      checks.push({ status: "warn", code: "cursor-adapter", message: "Cursor is installed but this workspace has no .cursor/mcp.json; run `nemeda-agent cursor init` (or `setup`)." });
+    }
     if (existsSync(path.join(context.root, ".mcp.json")) && existsSync(path.join(context.root, ".codex", "config.toml"))) {
       checks.push({ status: "warn", code: "duplicated-mcp", message: "MCP configuration exists in both .mcp.json and .codex/config.toml." });
     }
   }
-  for (const host of ["node", "codex", "claude"]) {
+  for (const host of ["node", "codex", "claude", "cursor"]) {
     checks.push({
       status: executableAvailable(host) ? "pass" : "warn",
       code: `host-${host}`,

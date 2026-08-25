@@ -74,6 +74,13 @@ the repository supplies thin adapters:
 - `.codex-plugin/plugin.json` and `.agents/plugins/marketplace.json`;
 - `.claude-plugin/plugin.json` and `.claude-plugin/marketplace.json`.
 
+Cursor has no plugin system, so its adapter is generated per machine instead of
+committed: `nemeda-agent cursor init` writes `.cursor/mcp.json` (the same
+read-only MCP server), an always-on rule pointing at the MCP context and
+`AGENTS.md`, and slash-command shims that reference the plugin's skills by
+path. Shared Cursor commands come from the same Drive `commands` folder the
+other hosts link.
+
 The adapters point at the same skills, scripts, and MCP implementation. They must not
 contain forked copies of methodology.
 
