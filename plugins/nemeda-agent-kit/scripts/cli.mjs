@@ -14,7 +14,7 @@ import {
 function parseArguments(argv) {
   const [command = "help", ...rest] = argv;
   const options = { profiles: [] };
-  if (command === "slack" && rest[0] && !rest[0].startsWith("-")) options.subcommand = rest.shift();
+  if (["slack", "airtable"].includes(command) && rest[0] && !rest[0].startsWith("-")) options.subcommand = rest.shift();
   for (let index = 0; index < rest.length; index += 1) {
     const value = rest[index];
     if (value === "--json") options.json = true;
@@ -24,6 +24,8 @@ function parseArguments(argv) {
     else if (value === "--role") options.role = rest[++index];
     else if (value === "--profile") options.profiles.push(rest[++index]);
     else if (value === "--workspace") options.workspace = true;
+    else if (value === "--workspace-id") options.workspaceId = rest[++index];
+    else if (value === "--name") options.projectName = rest[++index];
     else if (value === "--dry-run") options.dryRun = true;
     else if (value === "--as") options.as = rest[++index];
     else if (value === "--server") options.server = rest[++index];
@@ -48,6 +50,7 @@ Usage:
   nemeda-agent setup [--cwd PATH] [--json] [--dry-run]
   nemeda-agent context [--cwd PATH] [--json]
   nemeda-agent doctor [--cwd PATH] [--json]
+  nemeda-agent airtable init --name NAME --workspace-id wspXXX [--json]
   nemeda-agent slack <init|doctor|run|install|manifest> [--json]
   nemeda-agent slack ask "question" [--cwd PATH]
   nemeda-agent slack join <https://relay-url> [--as NAME] | leave | relay
@@ -62,6 +65,10 @@ Commands:
            never overwrites existing files.
   context  Show the normalized repository context.
   doctor   Run read-only configuration, Drive, Airtable, and host diagnostics.
+  airtable Provision the canonical project base (Backlog, Team, Knowledge Log)
+           through the Airtable API and print the config snippet to paste into
+           .nemeda/agent-kit.json. Reads AIRTABLE_API_KEY from the environment
+           or the workspace .env.local.
   slack    Run the personal Slack bridge on this machine.
              init      create ~/.nemeda/runner.json and the token file
              doctor    check registry, routing, tokens, and channel membership
@@ -114,6 +121,29 @@ async function promptForServer(state) {
   } finally {
     rl.close();
   }
+}
+
+async function runAirtable(options) {
+  if (options.subcommand !== "init") throw new Error("Unknown airtable subcommand; use: nemeda-agent airtable init");
+  const { createCanonicalBase, airtableConfigSnippet } = await import("./lib/airtable-provision.mjs");
+  const { loadEnvLocal } = await import("./lib/env.mjs");
+  loadEnvLocal(options.cwd || defaultWorkspaceDirectory(), process.env);
+  if (!options.projectName) throw new Error("Pass --name for the new base (usually the project name).");
+  const result = await createCanonicalBase({
+    apiKey: process.env.AIRTABLE_API_KEY,
+    workspaceId: options.workspaceId,
+    projectName: options.projectName
+  });
+  const snippet = airtableConfigSnippet(result);
+  if (options.json) {
+    print({ ...result, raw: undefined, snippet }, true);
+    return 0;
+  }
+  console.log(`Created base "${options.projectName}" (${result.baseId}) with tables: ${Object.keys(result.tables).join(", ")}.`);
+  for (const warning of result.warnings || []) console.log(`WARN: ${warning}`);
+  console.log("\nAdd this to .nemeda/agent-kit.json:");
+  console.log(JSON.stringify(snippet, null, 2));
+  return 0;
 }
 
 async function runSlack(options) {
@@ -222,6 +252,12 @@ export function run(argv = process.argv.slice(2)) {
         }
       }
       return report.actions.some((entry) => entry.status === "error") ? 1 : 0;
+    }
+    if (command === "airtable") {
+      return runAirtable(options).catch((error) => {
+        console.error(`nemeda-agent: ${error instanceof Error ? error.message : String(error)}`);
+        return 2;
+      });
     }
     if (command === "slack") {
       return runSlack(options).catch((error) => {

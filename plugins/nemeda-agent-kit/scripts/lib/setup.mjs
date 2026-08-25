@@ -25,6 +25,40 @@ function action(kind, status, message) {
   return { kind, status, message };
 }
 
+// Conventions travel with the folders: every provisioned Drive folder gets a
+// short README saying what belongs in it, so the structure explains itself to
+// every teammate and every AI, on every machine, and does not degrade into
+// loose files at the root.
+const DRIVE_FOLDER_READMES = {
+  docs: "# docs\n\nProject documentation, shared by the whole team.\n\nFile things in the matching subfolder (meeting notes in `meets/`, transcripts in `transcriptions/`, analysis in `analisis/`). Create a new subfolder rather than leaving files loose in this root.\n",
+  config: "# config\n\nShared, non-secret configuration: environment templates, service settings, VPN profiles.\n\nSecrets never go here — they live in each person's local `.env` files.\n",
+  skills: "# skills\n\nShared agent skills for this project. Every teammate's AI loads these through the workspace symlinks, so a skill improved here improves for everyone.\n",
+  commands: "# commands\n\nShared slash commands for this project, loaded by every teammate's AI through the workspace symlinks.\n"
+};
+
+function provisionDriveFolder(target, relativePath, actions, dryRun, kind) {
+  if (existsSync(target)) {
+    actions.push(action(kind, "kept", `${relativePath}/ already exists on the shared drive.`));
+    return;
+  }
+  if (dryRun) {
+    actions.push(action(kind, "planned", `create ${relativePath}/ on the shared drive`));
+    return;
+  }
+  mkdirSync(target, { recursive: true });
+  const readme = DRIVE_FOLDER_READMES[path.basename(relativePath)];
+  if (readme && !existsSync(path.join(target, "README.md"))) {
+    writeFileSync(path.join(target, "README.md"), readme);
+  }
+  actions.push(action(kind, "created", `${relativePath}/ created on the shared drive.`));
+}
+
+function createLink(target, linkPath) {
+  // Windows needs no privileges for directory junctions, unlike symlinks,
+  // and Node falls back transparently on other platforms.
+  symlinkSync(target, linkPath, process.platform === "win32" ? "junction" : null);
+}
+
 function setupDriveLinks(root, driveConfig, actions, dryRun, environment) {
   const plan = planDriveLinks(root, driveConfig, environment);
   if (plan.error) {
@@ -33,6 +67,9 @@ function setupDriveLinks(root, driveConfig, actions, dryRun, environment) {
   }
   actions.push(action("drive", "ok", `Shared drive found at ${plan.drivePath}.`));
   for (const link of plan.links) {
+    // The drive-side folder is provisioned, not required: a brand-new shared
+    // drive starts empty and setup builds the canonical structure in it.
+    provisionDriveFolder(link.target, path.relative(plan.drivePath, link.target), actions, dryRun, "drive-folder");
     let linkStat = null;
     try {
       linkStat = lstatSync(link.linkPath);
@@ -43,15 +80,18 @@ function setupDriveLinks(root, driveConfig, actions, dryRun, environment) {
       actions.push(action("link", "kept", `${link.relativeLinkPath} already links to ${readlinkSafe(link.linkPath)}.`));
     } else if (linkStat) {
       actions.push(action("link", "conflict", `${link.relativeLinkPath} exists and is not a symlink; resolve it by hand (move its content to Drive?).`));
-    } else if (!existsSync(link.target)) {
-      actions.push(action("link", "error", `${link.relativeLinkPath}: shared-drive folder is missing: ${link.target}.`));
     } else if (dryRun) {
       actions.push(action("link", "planned", `${link.relativeLinkPath} -> ${link.target}`));
+    } else if (!existsSync(link.target)) {
+      actions.push(action("link", "error", `${link.relativeLinkPath}: shared-drive folder is missing: ${link.target}.`));
     } else {
       mkdirSync(path.dirname(link.linkPath), { recursive: true });
-      symlinkSync(link.target, link.linkPath);
+      createLink(link.target, link.linkPath);
       actions.push(action("link", "created", `${link.relativeLinkPath} -> ${link.target}`));
     }
+  }
+  for (const folder of plan.scaffold) {
+    provisionDriveFolder(folder.target, folder.relativePath, actions, dryRun, "scaffold");
   }
 }
 

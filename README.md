@@ -19,11 +19,21 @@ project instructions stay in `AGENTS.md`.
   checks.
 - A zero-dependency CLI: `nemeda-agent init`, `setup`, `context`, `doctor`, and
   `slack`.
-- **Shared-workspace assembly** (`nemeda-agent setup`): Google Drive symlinks
-  (`docs/`, `config/`, `.claude/skills`, `.claude/commands`), declared code
-  repository clones, an `.env.local` template, and the matching `.gitignore`
-  entries — all declared in `.nemeda/agent-kit.json` instead of per-project
-  shell scripts.
+- **Shared-workspace assembly and provisioning** (`nemeda-agent setup`): the
+  Google Drive structure itself (folders created when missing, each carrying a
+  README with its filing conventions, plus a declared docs taxonomy), the
+  workspace symlinks (`docs/`, `config/`, skills and commands for both Claude
+  and Codex; directory junctions on Windows), declared code repository clones,
+  an `.env.local` template, and the matching `.gitignore` entries — all
+  declared in `.nemeda/agent-kit.json` instead of per-project shell scripts.
+  Drive detection works on macOS, Windows, and Linux
+  ([drive-setup.md](docs/drive-setup.md)).
+- **Project provisioning end to end**: the `workspace-create` skill walks a new
+  project from nothing to a replicable workspace — Drive structure, workspace
+  repo, code repos, and a canonical Airtable base created through the API
+  (`nemeda-agent airtable init`) with the exact tables and fields the hooks
+  expect. A teammate replicates it with clone + `nemeda-agent setup`, and every
+  AI session receives the same project map and filing conventions.
 - **Airtable automations as plugin hooks**, parameterized by the same config:
   - A session-start reconciler reads open and merged PRs directly from GitHub
     (via `gh pr list`) and moves tasks with a matching `Airtable: recXXX` line

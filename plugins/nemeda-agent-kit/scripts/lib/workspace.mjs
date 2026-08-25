@@ -139,7 +139,7 @@ function validateDrive(drive, issues) {
     issues.push({ level: "error", code: "invalid-drive", message: "drive must be an object." });
     return;
   }
-  validateAllowedKeys(drive, ["sharedDrive", "links"], "drive", issues);
+  validateAllowedKeys(drive, ["sharedDrive", "links", "scaffold"], "drive", issues);
   if (typeof drive.sharedDrive !== "string" || !drive.sharedDrive.trim()) {
     issues.push({ level: "error", code: "invalid-drive", message: "drive.sharedDrive must be a non-empty string." });
   }
@@ -150,6 +150,16 @@ function validateDrive(drive, issues) {
   for (const [linkPath, drivePath] of Object.entries(drive.links)) {
     if (!isRelativeInsidePath(linkPath) || typeof drivePath !== "string" || !isRelativeInsidePath(drivePath)) {
       issues.push({ level: "error", code: "invalid-drive-link", message: `drive.links["${linkPath}"] must map a relative workspace path to a relative shared-drive path.` });
+    }
+  }
+  if (drive.scaffold !== undefined) {
+    validateStringArray(drive.scaffold, "drive.scaffold", issues);
+    if (Array.isArray(drive.scaffold)) {
+      drive.scaffold.forEach((folder, index) => {
+        if (typeof folder === "string" && !isRelativeInsidePath(folder)) {
+          issues.push({ level: "error", code: "invalid-drive", message: `drive.scaffold[${index}] must be a relative path inside the shared drive.` });
+        }
+      });
     }
   }
 }
@@ -571,6 +581,16 @@ function driveDoctorChecks(root, driveConfig, checks) {
       checks.push({ status: "pass", code: "drive-link", message: `${link.relativeLinkPath} resolves to Drive content.` });
     }
   }
+  // Parity with the declared taxonomy: if a scaffold folder is missing, either
+  // this machine has not run setup or someone reorganised the drive by hand.
+  const missingScaffold = plan.scaffold.filter((folder) => folder.target && !existsSync(folder.target)).map((folder) => folder.relativePath);
+  if (plan.scaffold.length) {
+    checks.push(
+      missingScaffold.length === 0
+        ? { status: "pass", code: "drive-scaffold", message: `All ${plan.scaffold.length} declared Drive folders exist.` }
+        : { status: "warn", code: "drive-scaffold", message: `Missing on the shared drive: ${missingScaffold.join(", ")}. Run \`nemeda-agent setup\` to create them.` }
+    );
+  }
 }
 
 function repositoryDoctorChecks(root, repositories, checks) {
@@ -720,6 +740,17 @@ export function initializeWorkspace(start = defaultWorkspaceDirectory(), options
   return { root, configPath, agentsPath, agentsCreated, config };
 }
 
+function describeLink(linkPath, drivePath) {
+  const base = drivePath.split("/").pop();
+  const known = {
+    docs: "project documentation and deliverables; anything a teammate should find later goes here",
+    config: "shared non-secret configuration; secrets stay in local .env files",
+    skills: "shared agent skills; improving one here improves it for every teammate",
+    commands: "shared slash commands for every teammate's AI"
+  };
+  return known[base] || `synced with the shared drive (${drivePath})`;
+}
+
 export function formatContextForHook(context) {
   if (context.mode !== "configured" || !context.config) return "";
   const lines = [
@@ -741,6 +772,18 @@ export function formatContextForHook(context) {
       .map(([linkPath, drivePath]) => `${linkPath} -> ${context.config.drive.sharedDrive}/${drivePath}`)
       .join(", ");
     lines.push(`Shared Drive links (run \`nemeda-agent setup\` if missing): ${links}`);
+    // The filing map is part of every session's context so every teammate's AI
+    // saves things in the same place, on every host and every machine.
+    lines.push("Where things live (shared with the whole team through Drive):");
+    for (const [linkPath, drivePath] of Object.entries(context.config.drive.links || {})) {
+      lines.push(`- ${linkPath}/ — ${describeLink(linkPath, drivePath)}`);
+    }
+    if (context.config.drive.scaffold?.length) {
+      lines.push(`Docs taxonomy: ${context.config.drive.scaffold.join(", ")}. File new documents into the matching folder; never leave files loose at the drive root, and add a new subfolder (updating drive.scaffold) when none fits.`);
+    }
+  }
+  if (context.config.context?.documents?.length) {
+    lines.push(`Reference documents (read on demand, not injected): ${context.config.context.documents.join(", ")}.`);
   }
   if (context.config.airtable?.tasks) {
     lines.push(`Airtable tasks: base ${context.config.airtable.baseId}, table ${context.config.airtable.tasks.tableId}.`);

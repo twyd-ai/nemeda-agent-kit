@@ -103,6 +103,40 @@ The Drive mount is detected language-agnostically (the "Shared drives" folder
 name is localized). Set `NEMEDA_DRIVE_ROOT=/path/to/shared-drive` to override
 detection (several Google accounts, Linux, tests).
 
+### Provisioning
+
+`nemeda-agent setup` does not just consume the Drive structure — it creates it.
+Any declared link target or `scaffold` folder missing on the shared drive is
+created (create-if-absent, like everything setup does), and the four canonical
+folders get a short README stating what belongs in them, so the conventions
+travel with the structure to every teammate and every AI:
+
+```json
+"drive": {
+  "sharedDrive": "Acme",
+  "links": {
+    "docs": "docs",
+    "config": "config",
+    ".claude/skills": "skills",
+    ".claude/commands": "commands",
+    ".agents/skills": "skills",
+    ".agents/commands": "commands"
+  },
+  "scaffold": ["docs/meetings", "docs/transcripts", "docs/plans", "docs/analysis"]
+}
+```
+
+Linking both `.claude/` and `.agents/` to the same Drive folders gives Claude
+Code and Codex users identical shared skills and commands. The `scaffold` list
+is the project's docs taxonomy: setup creates it, doctor checks it, and the
+session context tells every AI to file documents into it rather than leaving
+files loose at the drive root.
+
+Creating the **shared drive itself** needs the Google Drive UI (Workspace
+account); everything inside it is automated. Platform notes for the desktop
+client are in [drive-setup.md](drive-setup.md) — the kit detects mounts on
+macOS, Windows (junctions, no admin needed), and Linux (rclone/gvfs).
+
 ## Airtable (`airtable`)
 
 Replaces the per-project constants of the legacy workspace scripts. IDs are
@@ -231,6 +265,19 @@ nemeda-agent slack install              # macOS LaunchAgent, starts at login
 Use `slack ask` before creating any Slack app: it runs the exact backend path
 the runner uses and prints what Slack would render, which is how the voice gets
 tuned without spending a real conversation.
+
+### Provisioning a base
+
+```bash
+nemeda-agent airtable init --name "Acme" --workspace-id wspXXXXXXXXXXXX
+```
+
+creates the canonical base through the Airtable Meta API — Backlog (Status/
+Notes/Priority/Owner), Team (Name/Email/Role), Knowledge Log (with the exact
+field names the hooks write, including the Person link to Team) — and prints
+the `airtable` config snippet to paste into `.nemeda/agent-kit.json`. Needs an
+`AIRTABLE_API_KEY` with the `schema.bases:write` scope; the workspace id is in
+the airtable.com URL.
 
 ## Rules
 
