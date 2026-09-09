@@ -64,8 +64,87 @@ const PROVIDERS = {
     notFoundHint: "Create it in Google Drive (or ask the owner for access), wait for it to sync, and retry."
     // No matchSharedDrive: a Google shared drive folder carries the exact
     // name declared in the configuration.
+  },
+  // OneDrive layouts:
+  // - macOS: the OneDrive client streams every account under
+  //   ~/Library/CloudStorage, one folder per account (OneDrive-Personal,
+  //   OneDrive-<Org>) plus one per synced SharePoint library collection
+  //   (OneDrive-SharedLibraries-<Org>), which holds the "<Site> - <Library>"
+  //   folders directly — no extra nesting versus a personal/org root.
+  // - Windows: the classic client exposes %OneDrive%, %OneDriveConsumer%,
+  //   and %OneDriveCommercial%, plus "OneDrive - <Org>" under the user
+  //   profile; a newer SharePoint sync client mounts a library at
+  //   %USERPROFILE%\<Org>\<Site> - <Library>, where <Org> is an arbitrary
+  //   folder name. Scanning every folder under the profile as a candidate
+  //   would be too broad, so only a top-level folder that already contains
+  //   a "<Something> - <Something>"-shaped child is treated as an <Org> mount.
+  // - Linux: no official client; rclone (`onedrive:`) and onedriver mount at
+  //   the conventional ~/OneDrive.
+  onedrive: {
+    id: "onedrive",
+    label: "OneDrive",
+    client: "OneDrive",
+    mountCandidates(environment, platform) {
+      if (platform === "darwin") {
+        const cloudStorage = path.join(os.homedir(), "Library", "CloudStorage");
+        if (!existsSync(cloudStorage)) return [];
+        return readdirSync(cloudStorage)
+          .filter((name) => name.startsWith("OneDrive-"))
+          .map((name) => path.join(cloudStorage, name));
+      }
+      if (platform === "win32") {
+        const candidates = [];
+        for (const key of ["OneDrive", "OneDriveConsumer", "OneDriveCommercial"]) {
+          const root = environment[key];
+          if (root && existsSync(root)) candidates.push(root);
+        }
+        const profile = environment.USERPROFILE;
+        if (profile && existsSync(profile)) {
+          for (const name of safeReadDirectories(profile)) {
+            if (name.startsWith("OneDrive - ")) candidates.push(path.join(profile, name));
+          }
+          for (const name of safeReadDirectories(profile)) {
+            const org = path.join(profile, name);
+            if (candidates.includes(org)) continue;
+            if (safeReadDirectories(org).some(looksLikeLibraryName)) candidates.push(org);
+          }
+        }
+        return candidates;
+      }
+      const candidates = [];
+      for (const name of ["OneDrive", "onedrive"]) {
+        const mount = path.join(os.homedir(), name);
+        if (existsSync(mount)) candidates.push(mount);
+      }
+      return candidates;
+    },
+    installInstructions(platform) {
+      if (platform === "darwin") {
+        return "Install OneDrive (brew install --cask onedrive), sign in, and let the initial sync finish.";
+      }
+      if (platform === "win32") {
+        return "Install OneDrive (https://www.microsoft.com/microsoft-365/onedrive/download), sign in, and sync the shared folder (\"Add shortcut to My files\") or the SharePoint library (its Sync button).";
+      }
+      return "There is no official OneDrive client for Linux. Mount it with rclone (rclone mount onedrive: ~/OneDrive) or onedriver, or set NEMEDA_DRIVE_ROOT to the shared folder path. See docs/drive-setup.md.";
+    },
+    notFoundHint: "Add the shared folder to \"My files\" or sync the SharePoint library from the browser, wait for it to sync, and retry.",
+    // Synced SharePoint libraries are named "<Site> - <Library>" and the
+    // library name is localized ("Documents", "Documentos", "Dokumente"), so
+    // an exact name match alone would miss them; accept any folder whose
+    // name starts with "<sharedDriveName> - ".
+    matchSharedDrive(sharedDriveName, entryName) {
+      return entryName.startsWith(`${sharedDriveName} - `);
+    }
   }
 };
+
+// Loose signal that a folder plays the "<Site> - <Library>" role, used only
+// to decide whether an arbitrary top-level Windows folder is worth treating
+// as a OneDrive mount — the real name match still runs through
+// matchSharedDrive afterwards.
+function looksLikeLibraryName(name) {
+  return / - /.test(name);
+}
 
 export const DEFAULT_DRIVE_PROVIDER = "google";
 export const DRIVE_PROVIDERS = Object.keys(PROVIDERS);
@@ -104,16 +183,16 @@ export function findSharedDrive(sharedDriveName, environment = process.env, plat
   const override = environment.NEMEDA_DRIVE_ROOT;
   if (override) {
     return existsSync(override)
-      ? { drivePath: override, mount: path.dirname(override), error: null }
-      : { drivePath: null, mount: null, error: `NEMEDA_DRIVE_ROOT does not exist: ${override}` };
+      ? { drivePath: override, mount: path.dirname(override), error: null, ambiguous: [] }
+      : { drivePath: null, mount: null, error: `NEMEDA_DRIVE_ROOT does not exist: ${override}`, ambiguous: [] };
   }
   const entry = driveProvider(provider);
   if (!entry) {
-    return { drivePath: null, mount: null, error: `Unknown drive provider "${provider}". Supported: ${DRIVE_PROVIDERS.join(", ")}.` };
+    return { drivePath: null, mount: null, error: `Unknown drive provider "${provider}". Supported: ${DRIVE_PROVIDERS.join(", ")}.`, ambiguous: [] };
   }
   const mounts = driveMountCandidates(environment, platform, entry.id);
   if (mounts.length === 0) {
-    return { drivePath: null, mount: null, error: `No ${entry.label} mount found. ${entry.installInstructions(platform)}` };
+    return { drivePath: null, mount: null, error: `No ${entry.label} mount found. ${entry.installInstructions(platform)}`, ambiguous: [] };
   }
   // A folder named like the drive can exist in "My Drive" too, so a name match
   // alone is ambiguous. The structural difference is reliable across locales:
@@ -133,12 +212,26 @@ export function findSharedDrive(sharedDriveName, environment = process.env, plat
   }
   matches.sort((a, b) => a.rank - b.rank);
   if (matches.length > 0) {
-    return { drivePath: matches[0].drivePath, mount: matches[0].mount, error: null };
+    const bestRank = matches[0].rank;
+    // Two matches at different ranks are not ambiguous: the ranking already
+    // expresses a deliberate preference (a clean container over a personal
+    // root holding loose files). Only a tie at the best rank — two
+    // equally-plausible candidates, e.g. a shared folder and a synced
+    // library with the same name — is worth a doctor warning instead of
+    // silently picking one.
+    const ambiguous = [...new Set(matches.filter((match) => match.rank === bestRank).map((match) => match.drivePath))];
+    return {
+      drivePath: matches[0].drivePath,
+      mount: matches[0].mount,
+      error: null,
+      ambiguous: ambiguous.length > 1 ? ambiguous : []
+    };
   }
   return {
     drivePath: null,
     mount: mounts[0],
-    error: `Shared drive "${sharedDriveName}" not found under ${mounts.join(", ")}. ${entry.notFoundHint}`
+    error: `Shared drive "${sharedDriveName}" not found under ${mounts.join(", ")}. ${entry.notFoundHint}`,
+    ambiguous: []
   };
 }
 

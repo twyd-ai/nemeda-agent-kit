@@ -162,8 +162,19 @@ All filesystem-based, no network, in `tests/provisioning.test.mjs`:
    schema, doctor messages use the provider label, `planDriveLinks` reports
    the provider it used. Name matching beyond the exact folder name is a
    per-provider `matchSharedDrive(name, entryName)` hook, unused by Google.
-2. **OneDrive provider**: mount scanning for the three platforms, library
-   name matching, doctor wording, ambiguity warning, tests.
+2. **OneDrive provider** — done. Mount scanning for the three platforms
+   (macOS `CloudStorage/OneDrive-*`, Windows `%OneDrive%` family plus
+   `OneDrive - <Org>` and a heuristic `<Org>` folder for the SharePoint sync
+   client, Linux `~/OneDrive`), `matchSharedDrive` for `"<name> - <library>"`,
+   install instructions, a generic `drive-ambiguous` doctor warning when two
+   candidates tie at the same rank (benefits Google too — e.g. the same
+   shared drive name reachable from two accounts), and a macOS-only
+   `drive-placeholder` warning for undownloaded `skills`/`commands` files.
+   The placeholder check cannot be covered by an automated test: it relies on
+   `stat.blocks === 0`, a real APFS cloud-placeholder state that cannot be
+   fabricated with a normal file write, so its verification is deferred to
+   phase 4 (manual, on a machine with an actual undownloaded file). Verified
+   end-to-end against the real `OneDrive-Personal` mount on this machine.
 3. **Docs and skills**: the four documents, the create skill, the example.
 4. **Manual verification** on a Mac with `OneDrive-Personal` mounted (a
    shared folder is enough) and, when available, one Windows machine with a

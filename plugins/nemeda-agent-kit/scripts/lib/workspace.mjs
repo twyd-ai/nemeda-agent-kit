@@ -8,6 +8,7 @@ import {
   readdirSync,
   readFileSync,
   realpathSync,
+  statSync,
   writeFileSync
 } from "node:fs";
 import path from "node:path";
@@ -561,6 +562,29 @@ function gitIgnores(root, target) {
   }
 }
 
+function isAlwaysKeepCandidate(relativeLinkPath) {
+  const base = path.basename(relativeLinkPath);
+  return base === "skills" || base === "commands";
+}
+
+function hasPlaceholderFiles(directory, depth = 2) {
+  try {
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      if (entry.name.startsWith(".")) continue;
+      const full = path.join(directory, entry.name);
+      if (entry.isFile()) {
+        const stat = statSync(full);
+        if (stat.size > 0 && stat.blocks === 0) return true;
+      } else if (entry.isDirectory() && depth > 0 && hasPlaceholderFiles(full, depth - 1)) {
+        return true;
+      }
+    }
+  } catch {
+    // Unreadable directory: the drive-link check above already reports it.
+  }
+  return false;
+}
+
 function driveDoctorChecks(root, driveConfig, checks) {
   const plan = planDriveLinks(root, driveConfig);
   const provider = driveProvider(driveConfig);
@@ -570,6 +594,13 @@ function driveDoctorChecks(root, driveConfig, checks) {
     return;
   }
   checks.push({ status: "pass", code: "drive-mount", message: `Shared drive "${driveConfig.sharedDrive}" found at ${plan.drivePath}${provider ? ` (${provider.label})` : ""}.` });
+  if (plan.ambiguous && plan.ambiguous.length > 1) {
+    checks.push({
+      status: "warn",
+      code: "drive-ambiguous",
+      message: `Multiple matches found for "${driveConfig.sharedDrive}": ${plan.ambiguous.join(", ")}. Using the first one; set NEMEDA_DRIVE_ROOT to pick a specific one.`
+    });
+  }
   for (const link of plan.links) {
     let stat = null;
     try {
@@ -587,6 +618,18 @@ function driveDoctorChecks(root, driveConfig, checks) {
       checks.push({ status: "warn", code: "drive-link", message: `${link.relativeLinkPath} resolves but is empty; Drive may be mounted without content yet.` });
     } else {
       checks.push({ status: "pass", code: "drive-link", message: `${link.relativeLinkPath} resolves to Drive content.` });
+      // Files On-Demand (OneDrive) and Drive streaming (Google) can leave a
+      // synced folder listable but its files undownloaded. Every AI reads
+      // skills and commands at session start, so a placeholder there is
+      // worth flagging; detection is macOS-only (stat.blocks === 0 for a
+      // non-empty file is reliable there and not portable to Windows).
+      if (process.platform === "darwin" && isAlwaysKeepCandidate(link.relativeLinkPath) && hasPlaceholderFiles(link.linkPath)) {
+        checks.push({
+          status: "warn",
+          code: "drive-placeholder",
+          message: `${link.relativeLinkPath} has files not downloaded yet. Set "Always keep on this device" on it so every AI session reads it instantly.`
+        });
+      }
     }
   }
   // Parity with the declared taxonomy: if a scaffold folder is missing, either

@@ -104,7 +104,7 @@
       "properties": {
         "provider": {
           "type": "string",
-          "enum": ["google"],
+          "enum": ["google", "onedrive"],
           "default": "google",
           "description": "Shared-storage provider whose desktop client syncs the shared drive. Defaults to google."
         },
