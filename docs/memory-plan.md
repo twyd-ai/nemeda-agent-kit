@@ -271,7 +271,7 @@ proposes consistent ones.
   removed in 0.5.0.
 
 Machine-local (`.env.local`): `NEMEDA_MEMORY_DB_URL` (personal),
-`MEMORY_LOG_AUTO=true` (replaces `KNOWLEDGE_LOG_AUTO`, same semantics),
+`MEMORY_HARVEST=true` (replaces `KNOWLEDGE_LOG_AUTO`; see "Unattended capture"),
 `NEMEDA_SQLITE_BIN` and `NEMEDA_PSQL_BIN` (overrides for the CLI engines).
 
 ## Flows
@@ -282,9 +282,10 @@ Machine-local (`.env.local`): `NEMEDA_MEMORY_DB_URL` (personal),
    explicit confirmation, write), but the write is `nemeda-agent memory add
    --json` on stdin, the author comes from git, the project from config, and
    the suggested tags from `memory.project.tags`. No ids anywhere.
-2. **Unattended session log** — Stop hook, opt-in via `MEMORY_LOG_AUTO`,
-   same dedupe-by-session state as today, appends a `pending` entry to the
-   author's journal (a local append, sub-second, so the hook budget holds).
+2. **Unattended session log** — see "Unattended capture" below. Hooks only
+   record which sessions happened; a deferred harvester resumes each closed
+   session through the host's own CLI, writes the summary, and appends a
+   `pending` entry. Opt-in via `MEMORY_HARVEST=true`.
 3. **Meeting entries** — the meeting pipeline (`meeting-capture-plan.md`,
    step 6) appends a `meeting` entry with the notes summary and a `source`
    pointing at the transcript folder.
@@ -320,6 +321,99 @@ Machine-local (`.env.local`): `NEMEDA_MEMORY_DB_URL` (personal),
    id, and reports counts. Re-runnable: existing `source.recordId` values
    are skipped.
 
+## Unattended capture
+
+People forget to run the reviewed flow, and a `pending` stub with no summary
+(today's `KNOWLEDGE_LOG_AUTO`) is forgotten just the same. The fix is to have
+the summary written for them, after the fact, on their own machine, and leave
+only a ten-second confirmation. Three facts make this possible on both hosts:
+
+- Claude Code and Codex fire the same plugin hook events the kit already
+  ships (`SessionStart`, `Stop`, `PostToolUse`), so capture is one code path.
+- Both keep every session on disk with an id: Claude under
+  `~/.claude/projects/<cwd-slug>/<session-id>.jsonl`, Codex under
+  `~/.codex/sessions/YYYY/MM/DD/rollout-*-<session-id>.jsonl` plus
+  `~/.codex/session_index.jsonl`.
+- Both can reopen a past session non-interactively and answer one more
+  prompt against its full context: `claude -p --resume <id> …` and
+  `codex exec resume <id> …`. No transcript parsing, no format coupling.
+
+Neither host's own scheduler fits: Claude Code routines run in the cloud
+without access to local transcripts, and Codex has no equivalent. The
+scheduler has to be local.
+
+### Three layers
+
+1. **Ledger (hooks, milliseconds, no model).** `SessionStart` and `Stop`
+   append `{ sessionId, tool, model, cwd, project, startedAt, lastActivity }`
+   to `.nemeda/state/sessions.json`. `Stop` fires after every turn, so
+   `lastActivity` keeps moving; a session counts as *closed* when it has been
+   idle for `memory.harvest.idleMinutes` (default 30) or its transcript file
+   stopped changing. Only sessions whose `cwd` is inside a kit-configured
+   repository are recorded: personal sessions never enter the ledger.
+2. **Harvester (deferred, unattended).** `nemeda-agent memory harvest`
+   takes every closed, unharvested session and runs the matching host CLI
+   with the `memory-log` skill in unattended mode:
+
+   ```
+   claude -p --resume <id> --output-format json --tools "" \
+          --append-system-prompt <memory-log prompt> "Produce the entries."
+   codex exec resume <id> --sandbox read-only --skip-git-repo-check \
+          -o <tmp>.json "<memory-log prompt>\n\nProduce the entries."
+   ```
+
+   The prompt asks for the same output as the reviewed flow (one entry per
+   model segment, internal and client summary, tags from
+   `memory.project.tags`) as JSON. The kit validates it, appends each entry
+   as `pending` with `source = { kind: "session", sessionId, tool }`, and
+   marks the session harvested. If the session can no longer be resumed
+   (deleted, host upgraded), the fallback reads the transcript JSONL, keeps
+   only user and assistant text, and summarises it with a fresh `-p` /
+   `exec` call. Runs one session at a time, never inside a hook, and bills
+   the person's own subscription like the Slack bridge.
+3. **Triggers.** Two, so it works with and without installing anything:
+   - **Opportunistic**: the `SessionStart` hook, after writing the ledger,
+     spawns `memory harvest --previous` as a *detached* child (`spawn` with
+     `detached: true`, `stdio: "ignore"`, `unref()`), so the hook returns
+     immediately and yesterday's sessions get summarised while today's
+     starts. This alone covers most people: the next session harvests the
+     previous ones.
+   - **Scheduled**: `nemeda-agent memory install` registers a local job
+     every 30 minutes and at login — launchd on macOS (same code path as
+     `slack install`), a systemd user timer on Linux, Task Scheduler on
+     Windows — for machines where sessions must be logged the same day even
+     if no new session is opened.
+
+The `SessionStart` context line closes the loop: "3 session entries from
+this week are pending your review; run `nemeda-agent memory review` or
+`/memory-log review`". Reviewing an entry whose summary already exists is a
+confirmation, not a writing task, which is what removes the forgetting.
+
+### Config and switches
+
+```json
+"memory": {
+  "harvest": { "idleMinutes": 30, "maxSessionsPerRun": 5, "hosts": ["claude", "codex"] }
+}
+```
+
+Personal, in `.env.local`: `MEMORY_HARVEST=true` (opt-in; nothing is
+resumed without it), `MEMORY_HARVEST_MODEL` (cheaper model for summaries,
+optional). `doctor` reports the ledger size, harvestable sessions, the
+installed scheduler, and whether each host CLI is on `PATH`.
+
+### Limits
+
+- Cursor has neither plugin hooks nor a resumable CLI; its sessions are not
+  captured. The reviewed skill still works there by hand.
+- A harvested summary is written by the model that resumes the session, not
+  necessarily the one that did the work; the entry records both.
+- Resuming a long session costs tokens once per session; `maxSessionsPerRun`
+  and the idle threshold bound it, and the fallback path truncates
+  transcripts to the last N turns when they exceed a size cap.
+- Transcripts never leave the machine; only the resulting summary reaches the
+  project journal, exactly as with the manual flow today.
+
 ## CLI surface (`nemeda-agent memory`)
 
 ```
@@ -327,6 +421,8 @@ nemeda-agent memory add [--type T] [--title …] [--tags a,b] [--json]   # appen
 nemeda-agent memory list [--pending] [--type T] [--author E] [--since D]
 nemeda-agent memory search QUERY [--central] [--json]
 nemeda-agent memory review [--all]                                     # complete pending entries
+nemeda-agent memory harvest [--previous] [--session ID] [--dry-run]    # summarise closed sessions
+nemeda-agent memory install | uninstall                                # local scheduler for harvest
 nemeda-agent memory index [--rebuild]                                  # refresh the SQLite index
 nemeda-agent memory sync [--dry-run]                                   # promote to central
 nemeda-agent memory recap --period P [--scope project|central]
@@ -347,6 +443,7 @@ nemeda-agent memory doctor [--json]
 | `memory-central` | connection works, `meta.schema_version` compatible, `projectId` exists in `projects` |
 | `memory-grants` | connected role can `SELECT` the four tables and `INSERT` on `entries`; warns on `UPDATE`/`DELETE`/DDL rights |
 | `memory-sync` | unpromoted reviewed entries, last successful sync |
+| `memory-harvest` | opt-in state, host CLIs on `PATH`, closed sessions awaiting harvest, scheduler installed |
 | `memory-deprecated` | `airtable.knowledgeLog` still present |
 
 ## Tests
@@ -365,7 +462,10 @@ nemeda-agent memory doctor [--json]
   parameter passing, the `entries_current` fallback, and the version check
   are covered without a database;
 - import: mapping from a canned Airtable payload, re-run skips duplicates;
-- hooks: `MEMORY_LOG_AUTO` gating, dedupe by session id, sub-second budget.
+- ledger hook: cwd filter, idle detection, sub-second budget, detached spawn
+  never blocks;
+- harvester: host CLIs stubbed with scripts that emit canned JSON, output
+  validation, fallback path on a resume failure, `maxSessionsPerRun`.
 
 The SQL that provisions the database, and its tests, live with the
 provisioning file outside the kit. `docs/memory-central-contract.md` (to be
