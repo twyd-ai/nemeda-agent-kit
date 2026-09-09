@@ -58,6 +58,34 @@ test("host manifests declare hooks only where the host requires them", () => {
   assert.equal(existsSync(path.join(pluginRoot, ".claude-plugin", "mcp.json")), false);
 });
 
+test("Claude manifest uses only keys the Claude plugin validator accepts", () => {
+  const claude = readJson(path.join(pluginRoot, ".claude-plugin", "plugin.json"));
+  const accepted = new Set([
+    "name",
+    "version",
+    "description",
+    "author",
+    "homepage",
+    "repository",
+    "license",
+    "keywords",
+    "commands",
+    "agents",
+    "skills",
+    "hooks",
+    "mcpServers",
+    "outputStyles",
+    "lspServers"
+  ]);
+  const unknown = Object.keys(claude).filter((key) => !accepted.has(key));
+
+  assert.deepEqual(
+    unknown,
+    [],
+    "Claude Code and Claude Desktop refuse to install a plugin whose manifest has unrecognized keys (for example displayName)"
+  );
+});
+
 test("hosted plugin has no implicit executable directory", () => {
   const packageManifest = readJson(path.join(pluginRoot, "package.json"));
 
