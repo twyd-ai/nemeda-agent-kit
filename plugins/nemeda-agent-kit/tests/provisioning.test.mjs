@@ -4,7 +4,15 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { airtableConfigSnippet, canonicalBaseSchema } from "../scripts/lib/airtable-provision.mjs";
-import { driveInstallInstructions, findSharedDrive, planDriveLinks } from "../scripts/lib/drive.mjs";
+import {
+  DEFAULT_DRIVE_PROVIDER,
+  DRIVE_PROVIDERS,
+  driveInstallInstructions,
+  driveMountCandidates,
+  driveProvider,
+  findSharedDrive,
+  planDriveLinks
+} from "../scripts/lib/drive.mjs";
 import { setupWorkspace } from "../scripts/lib/setup.mjs";
 import { validateConfig } from "../scripts/lib/workspace.mjs";
 
@@ -89,6 +97,81 @@ test("driveInstallInstructions cover the three platforms", () => {
   assert.match(driveInstallInstructions("darwin"), /brew install/);
   assert.match(driveInstallInstructions("win32"), /drive-letter/);
   assert.match(driveInstallInstructions("linux"), /rclone/);
+});
+
+test("drive providers: google is the default and the registry is explicit", () => {
+  assert.equal(DEFAULT_DRIVE_PROVIDER, "google");
+  assert.deepEqual(DRIVE_PROVIDERS, ["google"]);
+  assert.equal(driveProvider().label, "Google Drive");
+  assert.equal(driveProvider({ sharedDrive: "Acme" }).id, "google");
+  assert.equal(driveProvider({ provider: "google" }).id, "google");
+  assert.equal(driveProvider("dropbox"), null);
+});
+
+test("provider argument does not change Google behaviour or the escape hatches", () => {
+  const mount = mkdtempSync(path.join(tmpdir(), "nemeda-mount-"));
+  mkdirSync(path.join(mount, "Shared drives", "Acme"), { recursive: true });
+  const environment = { NEMEDA_DRIVE_MOUNTS: mount };
+  assert.deepEqual(driveMountCandidates(environment, "darwin", "google"), [mount]);
+  assert.deepEqual(driveMountCandidates(environment, "darwin"), driveMountCandidates(environment, "darwin", "google"));
+  const implicit = findSharedDrive("Acme", environment);
+  const explicit = findSharedDrive("Acme", environment, process.platform, "google");
+  assert.deepEqual(explicit, implicit);
+  assert.equal(implicit.drivePath, path.join(mount, "Shared drives", "Acme"));
+  const root = mkdtempSync(path.join(tmpdir(), "nemeda-root-"));
+  const plan = planDriveLinks(root, { provider: "google", sharedDrive: "Acme", links: { docs: "docs" } }, { NEMEDA_DRIVE_ROOT: path.join(mount, "Shared drives", "Acme") });
+  assert.equal(plan.provider, "google");
+  assert.equal(plan.error, null);
+  assert.equal(planDriveLinks(root, { sharedDrive: "Acme", links: { docs: "docs" } }, environment).provider, "google");
+});
+
+test("unknown providers are reported, never guessed", () => {
+  const mount = mkdtempSync(path.join(tmpdir(), "nemeda-mount-"));
+  const missing = findSharedDrive("Acme", { NEMEDA_DRIVE_MOUNTS: mount }, process.platform, "dropbox");
+  assert.equal(missing.drivePath, null);
+  assert.match(missing.error, /Unknown drive provider "dropbox"/);
+  assert.match(driveInstallInstructions("darwin", "dropbox"), /Unknown drive provider/);
+  assert.deepEqual(driveMountCandidates({}, "darwin", "dropbox"), []);
+});
+
+test("validator accepts an omitted or google provider and rejects others", () => {
+  const base = {
+    schemaVersion: 1,
+    project: { id: "acme", name: "Acme" },
+    repository: { id: "acme", role: "workspace", profiles: [] },
+    context: { instructions: ["AGENTS.md"] },
+    tools: { required: [], optional: [] },
+    policies: { protectSecrets: true }
+  };
+  const drive = { sharedDrive: "Acme", links: { docs: "docs" } };
+  assert.deepEqual(validateConfig({ ...base, drive }), []);
+  assert.deepEqual(validateConfig({ ...base, drive: { provider: "google", ...drive } }), []);
+  const rejected = validateConfig({ ...base, drive: { provider: "dropbox", ...drive } });
+  assert.ok(rejected.some((issue) => issue.code === "invalid-drive" && /drive\.provider must be one of: google/.test(issue.message)));
+});
+
+test("setup and doctor run unchanged with an explicit google provider", async () => {
+  const { root, drive } = makeWorkspace({ scaffold: ["docs/meetings"] });
+  const configPath = path.join(root, ".nemeda", "agent-kit.json");
+  const config = JSON.parse(readFileSync(configPath, "utf8"));
+  config.drive = { provider: "google", ...config.drive };
+  writeFileSync(configPath, JSON.stringify(config));
+  const report = setupWorkspace(root, { environment: { NEMEDA_DRIVE_ROOT: drive } });
+  assert.ok(report.actions.some((entry) => entry.status === "created"), "links were created");
+  assert.ok(existsSync(path.join(drive, "docs", "meetings")));
+  const { workspaceDoctor } = await import("../scripts/lib/workspace.mjs");
+  const previous = process.env.NEMEDA_DRIVE_ROOT;
+  process.env.NEMEDA_DRIVE_ROOT = drive;
+  try {
+    const checks = workspaceDoctor(root).checks;
+    const mountCheck = checks.find((check) => check.code === "drive-mount");
+    assert.equal(mountCheck.status, "pass");
+    assert.match(mountCheck.message, /\(Google Drive\)/);
+    assert.ok(checks.filter((check) => check.code === "drive-link").every((check) => check.status === "pass"));
+  } finally {
+    if (previous === undefined) delete process.env.NEMEDA_DRIVE_ROOT;
+    else process.env.NEMEDA_DRIVE_ROOT = previous;
+  }
 });
 
 test("canonical Airtable schema matches what the hooks write", () => {

@@ -103,6 +103,12 @@ The Drive mount is detected language-agnostically (the "Shared drives" folder
 name is localized). Set `NEMEDA_DRIVE_ROOT=/path/to/shared-drive` to override
 detection (several Google accounts, Linux, tests).
 
+`provider` selects the shared-storage client the kit looks for. It is
+optional and defaults to `google`, the only provider today; the validator
+rejects any other value. Further providers (OneDrive / SharePoint, see
+[onedrive-plan.md](onedrive-plan.md)) plug into the same key without
+changing `links`, `scaffold`, or the workspace layout.
+
 ### Provisioning
 
 `nemeda-agent setup` does not just consume the Drive structure — it creates it.

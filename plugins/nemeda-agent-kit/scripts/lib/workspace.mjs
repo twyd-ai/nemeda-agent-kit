@@ -12,7 +12,7 @@ import {
 } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { planDriveLinks } from "./drive.mjs";
+import { DRIVE_PROVIDERS, driveProvider, planDriveLinks } from "./drive.mjs";
 import { ENV_LOCAL_NAME, loadEnvLocal } from "./env.mjs";
 
 export const CONFIG_RELATIVE_PATH = path.join(".nemeda", "agent-kit.json");
@@ -139,7 +139,10 @@ function validateDrive(drive, issues) {
     issues.push({ level: "error", code: "invalid-drive", message: "drive must be an object." });
     return;
   }
-  validateAllowedKeys(drive, ["sharedDrive", "links", "scaffold"], "drive", issues);
+  validateAllowedKeys(drive, ["provider", "sharedDrive", "links", "scaffold"], "drive", issues);
+  if (drive.provider !== undefined && !DRIVE_PROVIDERS.includes(drive.provider)) {
+    issues.push({ level: "error", code: "invalid-drive", message: `drive.provider must be one of: ${DRIVE_PROVIDERS.join(", ")}.` });
+  }
   if (typeof drive.sharedDrive !== "string" || !drive.sharedDrive.trim()) {
     issues.push({ level: "error", code: "invalid-drive", message: "drive.sharedDrive must be a non-empty string." });
   }
@@ -560,11 +563,13 @@ function gitIgnores(root, target) {
 
 function driveDoctorChecks(root, driveConfig, checks) {
   const plan = planDriveLinks(root, driveConfig);
+  const provider = driveProvider(driveConfig);
+  const client = provider?.client || "the drive client";
   if (plan.error) {
     checks.push({ status: "fail", code: "drive-mount", message: plan.error });
     return;
   }
-  checks.push({ status: "pass", code: "drive-mount", message: `Shared drive "${driveConfig.sharedDrive}" found at ${plan.drivePath}.` });
+  checks.push({ status: "pass", code: "drive-mount", message: `Shared drive "${driveConfig.sharedDrive}" found at ${plan.drivePath}${provider ? ` (${provider.label})` : ""}.` });
   for (const link of plan.links) {
     let stat = null;
     try {
@@ -577,7 +582,7 @@ function driveDoctorChecks(root, driveConfig, checks) {
     } else if (!stat.isSymbolicLink()) {
       checks.push({ status: "warn", code: "drive-link", message: `${link.relativeLinkPath} exists but is not a symlink to Drive.` });
     } else if (!existsSync(link.linkPath)) {
-      checks.push({ status: "fail", code: "drive-link", message: `${link.relativeLinkPath} is a broken symlink; is Google Drive for desktop running and streaming?` });
+      checks.push({ status: "fail", code: "drive-link", message: `${link.relativeLinkPath} is a broken symlink; is ${client} running and syncing?` });
     } else if (readdirSync(link.linkPath).filter((name) => !name.startsWith(".")).length === 0) {
       checks.push({ status: "warn", code: "drive-link", message: `${link.relativeLinkPath} resolves but is empty; Drive may be mounted without content yet.` });
     } else {

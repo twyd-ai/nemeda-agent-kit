@@ -156,9 +156,12 @@ All filesystem-based, no network, in `tests/provisioning.test.mjs`:
 
 ## Phases
 
-1. **Refactor without behavior change**: provider registry in `drive.mjs`,
-   Google as the only entry, `provider` accepted by the validator. Tests
-   green, `claude plugin validate` green.
+1. **Refactor without behavior change** — done. Provider registry in
+   `drive.mjs` (`driveProvider`, `DRIVE_PROVIDERS`, `DEFAULT_DRIVE_PROVIDER`),
+   Google as the only entry, `provider` accepted by the validator and the
+   schema, doctor messages use the provider label, `planDriveLinks` reports
+   the provider it used. Name matching beyond the exact folder name is a
+   per-provider `matchSharedDrive(name, entryName)` hook, unused by Google.
 2. **OneDrive provider**: mount scanning for the three platforms, library
    name matching, doctor wording, ambiguity warning, tests.
 3. **Docs and skills**: the four documents, the create skill, the example.

@@ -102,10 +102,16 @@
       "additionalProperties": false,
       "required": ["sharedDrive", "links"],
       "properties": {
+        "provider": {
+          "type": "string",
+          "enum": ["google"],
+          "default": "google",
+          "description": "Shared-storage provider whose desktop client syncs the shared drive. Defaults to google."
+        },
         "sharedDrive": {
           "type": "string",
           "minLength": 1,
-          "description": "Name of the Google shared drive that holds docs, config, skills, and commands."
+          "description": "Name of the shared drive (or synced document library) that holds docs, config, skills, and commands."
         },
         "links": {
           "type": "object",
