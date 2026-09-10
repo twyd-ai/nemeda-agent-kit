@@ -622,3 +622,48 @@ export function handOffRecording(recording, inbox) {
   renameSync(part, target);
   return { target, status: "created" };
 }
+
+// ---------------------------------------------------------------------------
+// Transcript listing, for `workspace_meetings` (MCP) and the CLI: what has
+// been transcribed, newest first, with the notes file when it exists.
+// ---------------------------------------------------------------------------
+
+export function listTranscripts(root, meetingsConfig, { limit = 20, since = null, query = "" } = {}) {
+  const directory = path.join(root, meetingsConfig.transcripts);
+  if (!existsSync(directory)) return [];
+  const needle = String(query || "").trim().toLowerCase();
+  const results = [];
+  for (const entry of readdirSync(directory, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    const folder = path.join(directory, entry.name);
+    const metaPath = path.join(folder, "meta.json");
+    if (!existsSync(metaPath)) continue;
+    let meta;
+    try {
+      meta = JSON.parse(readFileSync(metaPath, "utf8"));
+    } catch {
+      continue;
+    }
+    const date = String(meta.recordedAt || "").slice(0, 10);
+    if (since && date && date < since) continue;
+    const transcriptPath = path.join(folder, "transcript.txt");
+    let text = "";
+    if (needle || results.length < limit) text = existsSync(transcriptPath) ? readFileSync(transcriptPath, "utf8") : "";
+    if (needle && !`${meta.title || ""}\n${text}`.toLowerCase().includes(needle)) continue;
+    const notesName = meetingsConfig.notes ? `${entry.name}.md` : null;
+    const notesPath = notesName ? path.join(root, meetingsConfig.notes, notesName) : null;
+    results.push({
+      folder: path.relative(root, folder),
+      title: meta.title || null,
+      date,
+      durationSeconds: meta.durationSeconds ?? null,
+      language: meta.language || null,
+      engine: meta.engine || null,
+      recording: meta.sourceName || null,
+      notes: notesPath && existsSync(notesPath) ? path.relative(root, notesPath) : null,
+      excerpt: text.trim().slice(0, 300)
+    });
+  }
+  results.sort((a, b) => b.date.localeCompare(a.date) || b.folder.localeCompare(a.folder));
+  return results.slice(0, limit);
+}

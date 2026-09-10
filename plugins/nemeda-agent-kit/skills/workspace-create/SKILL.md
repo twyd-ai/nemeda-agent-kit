@@ -61,7 +61,13 @@ shows it.
      from degrading into loose files;
    - `workspace.repositories` with each code repo's `path`, `role`,
      `profiles`, and `remote` (or the single `repository` section if the
-     workspace is one repo).
+     workspace is one repo);
+   - `meetings`, if the team records meetings: `transcripts` and `notes`
+     inside the docs taxonomy (`docs/transcripts`, `docs/meetings`), plus
+     `inbox` (`docs/recordings/inbox`, added to `drive.scaffold`) when more
+     than one machine takes part. Each teammate then runs
+     `nemeda-agent meeting doctor` and `meeting setup` on their own machine;
+     see `docs/meeting-capture.md`.
 3. If using Airtable: `nemeda-agent airtable init --name <project>
    --workspace-id wsp...` and paste the printed snippet into the config.
    Add each teammate to the Team table.

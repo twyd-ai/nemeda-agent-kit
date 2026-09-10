@@ -63,7 +63,7 @@ test("MCP server initializes and lists its tools", async () => {
   assert.equal(responses.get(1).result.serverInfo.name, "nemeda-agent-kit");
   assert.deepEqual(
     responses.get(2).result.tools.map((tool) => tool.name),
-    ["workspace_context", "workspace_doctor", "workspace_config_schema", "memory_search", "memory_recent", "memory_get"]
+    ["workspace_context", "workspace_doctor", "workspace_config_schema", "workspace_meetings", "memory_search", "memory_recent", "memory_get"]
   );
 });
 

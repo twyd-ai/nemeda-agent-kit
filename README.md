@@ -17,8 +17,8 @@ project instructions stay in `AGENTS.md`.
   multi-repository work.
 - A read-only MCP server that exposes normalized workspace context and health
   checks.
-- A zero-dependency CLI: `nemeda-agent init`, `setup`, `context`, `doctor`, and
-  `slack`.
+- A zero-dependency CLI: `nemeda-agent init`, `setup`, `context`, `doctor`,
+  `meeting`, `memory`, and `slack`.
 - **Shared-workspace assembly and provisioning** (`nemeda-agent setup`): the
   shared drive structure itself — Google Drive or OneDrive/SharePoint,
   `drive.provider` in the config — (folders created when missing, each
@@ -50,6 +50,16 @@ project instructions stay in `AGENTS.md`.
   Every hook is a fast no-op in repositories without an `airtable` section,
   never blocks the tool that triggered it, and requires `gh` to be installed
   and authenticated — `nemeda-agent doctor` checks both explicitly.
+- **Meeting capture** (`nemeda-agent meeting`): a recording from OBS (or
+  Zoom, Teams, Meet) becomes a filed transcript on the shared drive, meeting
+  notes written by your own Claude Code or Codex CLI, and a project-memory
+  entry — all on your machines, nothing billed per minute. Apple's on-device
+  speech model on macOS 26 with Apple Silicon, whisper.cpp everywhere else;
+  `doctor` picks the engine and model from the hardware and `setup` installs
+  them on confirmation. Team roles split the work (a laptop only records, one
+  capable Mac transcribes the shared inbox), `watch`/`install` make it
+  unattended, and the `workspace_meetings` MCP tool lets any agent answer
+  "what did we decide on Tuesday". See [meeting-capture.md](docs/meeting-capture.md).
 - **Project memory** (`nemeda-agent memory`), replacing the Airtable
   Knowledge Log: session summaries, decisions, findings, and meeting
   outcomes as append-only, per-author journals on the shared drive — safe

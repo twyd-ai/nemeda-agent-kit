@@ -677,7 +677,7 @@ export function workspaceDoctor(start = defaultWorkspaceDirectory()) {
     if (context.config.workspace?.repositories) repositoryDoctorChecks(context.root, context.config.workspace.repositories, checks);
     if (context.config.airtable) airtableDoctorChecks(context.root, context.config.airtable, checks);
     if (context.config.memory) memoryDoctorChecks(context.root, context.config.memory, checks);
-    if (context.config.meetings) checks.push(...meetingDoctorChecks(context.root, context.config.meetings, context.config.drive, process.env, { memoryConfigured: Boolean(context.config.memory) }));
+    if (context.config.meetings) checks.push(...meetingDoctorChecks(context.root, context.config.meetings, context.config.drive, process.env, { memoryConfigured: Boolean(context.config.memory), projectId: context.config.project.id }));
   }
   return { root: context.root, mode: context.mode, checks };
 }

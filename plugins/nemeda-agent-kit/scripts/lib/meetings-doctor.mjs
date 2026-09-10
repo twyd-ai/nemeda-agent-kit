@@ -6,6 +6,7 @@
 import { existsSync, statSync } from "node:fs";
 import path from "node:path";
 import { detectBackend } from "./backend.mjs";
+import { meetingServiceStatus } from "./meetings-watch.mjs";
 import { ENV_LOCAL_NAME, loadEnvLocal } from "./env.mjs";
 import {
   HEARTBEAT_STALE_HOURS,
@@ -199,6 +200,20 @@ export function meetingDoctorChecks(root, meetingsConfig, driveConfig, environme
     checks.push({ status: existsSync(path.join(root, policy.path)) ? "pass" : "warn", code: "meetings-retention", message: `Recordings are archived to ${policy.path}/ after transcription${existsSync(path.join(root, policy.path)) ? "" : " (folder missing; it is created on first use)"}.` });
   } else if (policy?.keep === "delete") {
     checks.push({ status: "pass", code: "meetings-retention", message: `Recordings are deleted ${policy.afterDays} days after their transcript exists.` });
+  }
+
+  // Unattended service.
+  if (options.projectId) {
+    const service = meetingServiceStatus(options.projectId, resolved.environment, host.platform);
+    if (service.installed === null) {
+      checks.push({ status: "pass", code: "meetings-service", message: "Unattended mode on Windows uses a Task Scheduler entry; `nemeda-agent meeting install` prints the command." });
+    } else if (!service.installed) {
+      checks.push({ status: "pass", code: "meetings-service", message: "No watch service installed; `nemeda-agent meeting install` starts the loop at login, or run `meeting watch` by hand." });
+    } else if (service.loaded === false) {
+      checks.push({ status: "warn", code: "meetings-service", message: `Watch service ${service.label} is installed but not loaded; ${host.platform === "darwin" ? `launchctl bootstrap gui/$(id -u) ${service.file}` : `systemctl --user enable --now ${service.label}`}.` });
+    } else {
+      checks.push({ status: "pass", code: "meetings-service", message: `Watch service ${service.label} is installed${service.loaded ? " and running" : ""}; logs in ${service.logFile}.` });
+    }
   }
 
   // Backlog.

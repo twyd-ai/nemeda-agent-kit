@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { listTranscripts } from "./lib/meetings-core.mjs";
 import { queryEntries } from "./lib/memory-index.mjs";
 import {
   defaultWorkspaceDirectory,
@@ -39,6 +40,20 @@ const tools = [
     name: "workspace_config_schema",
     description: "Return the JSON Schema for .nemeda/agent-kit.json.",
     inputSchema: { type: "object", properties: {}, additionalProperties: false }
+  },
+  {
+    name: "workspace_meetings",
+    description: "List transcribed meetings (newest first) with title, date, duration, engine, the notes file when it exists, and a short excerpt. Use it to answer \"what did we discuss / decide in the meeting on …\" before searching the drive by hand; read the transcript or notes file it points at for the details.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        cwd: { type: "string", description: "Current repository or subdirectory." },
+        query: { type: "string", description: "Case-insensitive text that must appear in the title or transcript." },
+        since: { type: "string", description: "Only meetings recorded on or after this date (YYYY-MM-DD)." },
+        limit: { type: "integer", minimum: 1, maximum: 200, default: 20 }
+      },
+      additionalProperties: false
+    }
   },
   {
     name: "memory_search",
@@ -115,6 +130,14 @@ function toolResult(name, args = {}) {
   if (name === "workspace_context") return textResult(readWorkspaceContext(cwd));
   if (name === "workspace_doctor") return textResult(workspaceDoctor(cwd));
   if (name === "workspace_config_schema") return textResult(loadSchema());
+  if (name === "workspace_meetings") {
+    const context = readWorkspaceContext(cwd);
+    if (context.mode !== "configured" || !context.config?.meetings) {
+      return textResult({ error: "No `meetings` section in .nemeda/agent-kit.json for this repository; see docs/meeting-capture.md." }, true);
+    }
+    const limit = Number.isInteger(args.limit) ? Math.min(Math.max(args.limit, 1), 200) : 20;
+    return textResult({ transcripts: listTranscripts(context.root, context.config.meetings, { limit, since: args.since || null, query: args.query || "" }) });
+  }
   if (name === "memory_search") {
     const { entries, error, engine, fallback } = loadMemoryEntries(cwd, { query: args.query || "", filters: memoryFilters(args) });
     if (error) return textResult({ error }, true);

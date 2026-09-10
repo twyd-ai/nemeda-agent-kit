@@ -340,8 +340,9 @@ the airtable.com URL.
 
 Turns finished meeting recordings into transcripts filed on the shared drive.
 Optional; omit it and `nemeda-agent meeting` refuses to run. Design and
-roadmap in [meeting-capture-plan.md](meeting-capture-plan.md); this is what
-phases 1 to 4 ship.
+user guide (OBS setup, engines, team roles, unattended mode) in
+[meeting-capture.md](meeting-capture.md), design and roadmap in
+[meeting-capture-plan.md](meeting-capture-plan.md).
 
 ```json
 "meetings": {
@@ -457,12 +458,22 @@ machine should only record). `base` exists for `setup --model base`.
 - `nemeda-agent meeting notes <folder> [--force]`: notes and memory entry
   for an existing transcript folder.
 - `nemeda-agent meeting doctor`: role, inbox and transcriber heartbeat,
-  notes backend, memory logging, retention policy,
+  notes backend, memory logging, retention policy, watch service,
   machine capability and estimate per hour of audio, engine selection and
   why, ffmpeg and model, recordings folder, transcripts/notes folders and
   whether they sit inside a Drive link, and the local and inbox backlogs. A
   recorder only gets the role, inbox, and recordings-folder checks. The same checks appear in `nemeda-agent doctor` and the
   `workspace_doctor` MCP tool when the section exists.
+- `nemeda-agent meeting watch [--interval SECONDS] [--once]`: runs `process`
+  for this machine's role in a loop (default every 30 s) and logs what
+  changed. `nemeda-agent meeting install | uninstall` registers or removes
+  that loop as a user service that starts at login: a launchd agent on
+  macOS, a systemd user unit on Linux, a printed `schtasks` command on
+  Windows. One service per project; logs in
+  `~/.nemeda/state/meetings-<project>.log`.
+- The `workspace_meetings` MCP tool lists transcribed meetings (title, date,
+  duration, notes file, excerpt), filtered by text or date, for any agent
+  session.
 - `nemeda-agent meeting setup [--obs] [--model TIER] [--yes] [--dry-run]`:
   shows the plan (Homebrew or winget installs, model download to
   `~/.nemeda/models/`, `.env.local` lines), asks for confirmation, then runs

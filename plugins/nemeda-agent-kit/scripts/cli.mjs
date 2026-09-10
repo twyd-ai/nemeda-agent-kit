@@ -47,6 +47,8 @@ function parseArguments(argv) {
     else if (value === "--obs") options.obs = true;
     else if (value === "--yes" || value === "-y") options.yes = true;
     else if (value === "--no-notes") options.skipNotes = true;
+    else if (value === "--interval") options.interval = Number(rest[++index]);
+    else if (value === "--once") options.once = true;
     else if (value === "--force") options.force = true;
     else if (command === "meeting" && options.subcommand === "notes" && !options.folder && !value.startsWith("-")) options.folder = value;
     else if (command === "meeting" && options.subcommand === "process" && !options.file && !value.startsWith("-")) options.file = value;
@@ -81,6 +83,8 @@ Usage:
   nemeda-agent slack run [--server NAME]      # one runner per relay, side by side
   nemeda-agent meeting process [FILE] [--title TITLE] [--engine NAME] [--no-notes] [--dry-run] [--json]
   nemeda-agent meeting notes FOLDER [--force] [--dry-run] [--json]
+  nemeda-agent meeting watch [--interval SECONDS] [--once] [--engine NAME] [--no-notes]
+  nemeda-agent meeting install | uninstall [--interval SECONDS] [--dry-run] [--json]
   nemeda-agent meeting list [--json]
   nemeda-agent meeting doctor [--engine NAME] [--json]
   nemeda-agent meeting setup [--obs] [--model TIER] [--engine NAME] [--yes] [--dry-run] [--json]
@@ -138,6 +142,11 @@ Commands:
              setup     install the missing tools (brew/winget, on confirmation),
                        download the recommended whisper model, and record the
                        choices in .env.local; --obs also installs OBS Studio
+             watch     run \`process\` for this machine's role every 30 s in the
+                       foreground (--once for a single pass)
+             install   register the watch loop as a user service that starts at
+                       login (launchd on macOS, systemd --user on Linux, a Task
+                       Scheduler command on Windows); uninstall removes it
   memory   Read and write project memory (needs a \`memory\` section in
            .nemeda/agent-kit.json; see docs/memory-plan.md).
              add       append one entry; the summary is read from stdin (or,
@@ -311,12 +320,25 @@ async function runMeeting(options) {
     printReport(report, options, `Nemeda Agent Kit meeting notes${report.dryRun ? " (dry run)" : ""} at ${report.root}`);
     return report.actions.some((entry) => entry.status === "error") ? 1 : 0;
   }
+  if (subcommand === "watch") {
+    const { runMeetingWatch } = await import("./lib/meetings-watch.mjs");
+    await runMeetingWatch(cwd, { intervalSeconds: options.interval, once: Boolean(options.once), engine: options.engine, skipNotes: Boolean(options.skipNotes) });
+    return 0;
+  }
+  if (subcommand === "install" || subcommand === "uninstall") {
+    const { installMeetingService, uninstallMeetingService } = await import("./lib/meetings-watch.mjs");
+    const report = subcommand === "install"
+      ? installMeetingService(cwd, { intervalSeconds: options.interval || undefined, dryRun: Boolean(options.dryRun) })
+      : uninstallMeetingService(cwd, { dryRun: Boolean(options.dryRun) });
+    printReport(report, options, `Nemeda Agent Kit meeting ${subcommand}${report.dryRun ? " (dry run)" : ""} at ${report.root}`);
+    return report.actions.some((entry) => entry.status === "error") ? 1 : 0;
+  }
   if (subcommand === "doctor") {
     const { meetingDoctorChecks } = await import("./lib/meetings-doctor.mjs");
     const context = readWorkspaceContext(cwd);
     if (context.mode !== "configured") throw new Error("No .nemeda/agent-kit.json found; run `nemeda-agent init` first.");
     if (!context.config?.meetings) throw new Error("This workspace has no `meetings` section in .nemeda/agent-kit.json; add one to enable meeting capture.");
-    const checks = meetingDoctorChecks(context.root, context.config.meetings, context.config.drive, process.env, { explicitEngine: options.engine || null, memoryConfigured: Boolean(context.config.memory) });
+    const checks = meetingDoctorChecks(context.root, context.config.meetings, context.config.drive, process.env, { explicitEngine: options.engine || null, memoryConfigured: Boolean(context.config.memory), projectId: context.config.project.id });
     printReport({ checks }, options, `Nemeda Agent Kit meeting doctor at ${context.root}`);
     return checks.some((check) => check.status === "fail") ? 1 : 0;
   }
@@ -343,7 +365,7 @@ async function runMeeting(options) {
     printReport(report, options, dryRun ? "Planned:" : "Done:");
     return report.actions.some((entry) => entry.status === "error") ? 1 : 0;
   }
-  throw new Error(`Unknown meeting subcommand: ${subcommand}; use process, list, notes, doctor, or setup.`);
+  throw new Error(`Unknown meeting subcommand: ${subcommand}; use process, list, notes, doctor, setup, watch, install, or uninstall.`);
 }
 
 async function readStdin() {
