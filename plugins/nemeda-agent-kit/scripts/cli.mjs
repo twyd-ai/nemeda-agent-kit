@@ -39,6 +39,8 @@ function parseArguments(argv) {
     else if (value === "--since") options.since = rest[++index];
     else if (value === "--pending") options.pending = true;
     else if (value === "--all") options.all = true;
+    else if (value === "--session") options.sessionId = rest[++index];
+    else if (value === "--previous") options.previous = true;
     else if (value === "--model") options.model = rest[++index];
     else if (value === "--obs") options.obs = true;
     else if (value === "--yes" || value === "-y") options.yes = true;
@@ -80,6 +82,7 @@ Usage:
   nemeda-agent memory list [--pending] [--type TYPE] [--author EMAIL] [--since DATE] [--json]
   nemeda-agent memory search "query" [--pending] [--type TYPE] [--json]
   nemeda-agent memory review [ID] [--all] [--json]
+  nemeda-agent memory harvest [--session ID] [--dry-run] [--json]
 
 Commands:
   init     Create missing .nemeda/agent-kit.json and AGENTS.md safely.
@@ -135,6 +138,12 @@ Commands:
                        your own pending entries, optionally with changes as
                        JSON on stdin. Only the original author can review an
                        entry — a journal has exactly one writer by design.
+             harvest   resume every closed, un-summarised session recorded by
+                       the SessionStart/Stop hooks (or one --session ID) and
+                       log what it produced. Needs MEMORY_HARVEST=true in
+                       .env.local (it invokes claude/codex and costs
+                       tokens); NEMEDA_CLAUDE_BIN / NEMEDA_CODEX_BIN override
+                       the binary used.
 `;
 }
 
@@ -442,7 +451,37 @@ async function runMemory(options) {
     return 0;
   }
 
-  throw new Error(`Unknown memory subcommand: ${subcommand}; use add, list, search, or review.`);
+  if (subcommand === "harvest") {
+    const { flagEnabled, loadEnvLocal } = await import("./lib/env.mjs");
+    loadEnvLocal(context.root, process.env);
+    if (!flagEnabled("MEMORY_HARVEST", process.env)) {
+      throw new Error("MEMORY_HARVEST is not enabled; set MEMORY_HARVEST=true in .env.local to allow harvesting to resume sessions (it invokes the host CLI, and that costs tokens).");
+    }
+    const { harvestClosedSessions, harvestSessionById } = await import("./lib/harvest.mjs");
+    const dryRun = Boolean(options.dryRun);
+    const results = options.sessionId
+      ? [harvestSessionById(context.root, context.config, options.sessionId, { dryRun })]
+      : harvestClosedSessions(context.root, context.config, { dryRun });
+    if (options.json) {
+      print(results, true);
+      return results.some((result) => !result.ok) ? 1 : 0;
+    }
+    if (results.length === 0) {
+      console.log("No closed, unharvested sessions to summarise.");
+      return 0;
+    }
+    for (const result of results) {
+      if (result.ok) {
+        console.log(`Harvested ${result.sessionId}: ${result.created.length} entr${result.created.length === 1 ? "y" : "ies"}${dryRun ? " (dry run, nothing written)" : ` -> ${result.journalPath}`}`);
+        for (const error of result.errors) console.log(`  skipped a draft: ${error}`);
+      } else {
+        console.log(`Failed to harvest ${result.sessionId}: ${result.errors.join("; ")}`);
+      }
+    }
+    return results.some((result) => !result.ok) ? 1 : 0;
+  }
+
+  throw new Error(`Unknown memory subcommand: ${subcommand}; use add, list, search, review, or harvest.`);
 }
 
 async function runSlack(options) {

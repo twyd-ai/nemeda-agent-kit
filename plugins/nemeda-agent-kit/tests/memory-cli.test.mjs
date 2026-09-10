@@ -5,7 +5,7 @@
 // behavior worth locking in with a real invocation.
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { appendFileSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -35,9 +35,13 @@ function configuredWorkspace(email = "test@example.com") {
   return root;
 }
 
-function cli(args, { input, expectFailure = false } = {}) {
+function cli(args, { input, expectFailure = false, env } = {}) {
   try {
-    const stdout = execFileSync(process.execPath, [cliPath, ...args], { input: input || "", encoding: "utf8" });
+    const stdout = execFileSync(process.execPath, [cliPath, ...args], {
+      input: input || "",
+      encoding: "utf8",
+      env: env ? { ...process.env, ...env } : process.env
+    });
     if (expectFailure) throw new Error(`Expected failure but got: ${stdout}`);
     return { stdout, code: 0 };
   } catch (error) {
@@ -98,4 +102,38 @@ test("memory review with no pending entries reports an empty inbox instead of er
   const root = configuredWorkspace();
   const inbox = cli(["memory", "review", "--json", "--cwd", root]).stdout;
   assert.deepEqual(JSON.parse(inbox), []);
+});
+
+function stubClaude(dir, resultText) {
+  const file = path.join(dir, "fake-claude");
+  writeFileSync(file, `#!/bin/sh\ncat <<'EOF'\n${JSON.stringify({ type: "result", subtype: "success", result: resultText })}\nEOF\n`);
+  chmodSync(file, 0o755);
+  return file;
+}
+
+test("memory harvest refuses without MEMORY_HARVEST=true, and never spawns the stub", () => {
+  const root = configuredWorkspace();
+  const claude = stubClaude(mkdtempSync(path.join(tmpdir(), "nemeda-harvest-bin-")), JSON.stringify([{ type: "finding", title: "x", summary: "y" }]));
+  const result = cli(["memory", "harvest", "--cwd", root], { expectFailure: true, env: { NEMEDA_CLAUDE_BIN: claude } });
+  assert.match(result.stderr, /MEMORY_HARVEST is not enabled/);
+});
+
+test("memory harvest --session ID resumes a stubbed CLI and files the entry, through the real CLI end to end", () => {
+  const root = configuredWorkspace();
+  const claude = stubClaude(
+    mkdtempSync(path.join(tmpdir(), "nemeda-harvest-bin-")),
+    JSON.stringify([{ type: "finding", title: "Harvested via CLI", summary: "End to end through the real CLI." }])
+  );
+  const env = { MEMORY_HARVEST: "true", NEMEDA_CLAUDE_BIN: claude };
+
+  const dryRun = cli(["memory", "harvest", "--session", "cli-session", "--dry-run", "--json", "--cwd", root], { env }).stdout;
+  const dryRunResult = JSON.parse(dryRun)[0];
+  assert.equal(dryRunResult.ok, true);
+  assert.equal(JSON.parse(cli(["memory", "list", "--json", "--cwd", root]).stdout).length, 0, "dry run wrote nothing");
+
+  const real = JSON.parse(cli(["memory", "harvest", "--session", "cli-session", "--json", "--cwd", root], { env }).stdout)[0];
+  assert.equal(real.ok, true);
+  assert.equal(real.created[0].title, "Harvested via CLI");
+  const listed = JSON.parse(cli(["memory", "list", "--json", "--cwd", root]).stdout);
+  assert.equal(listed.length, 1);
 });
