@@ -221,6 +221,17 @@ export function filterEntries(entries, { type, author, status, since, tag } = {}
   });
 }
 
+// Newest first, fully deterministic: by date, then by when the revision was
+// written, then by id (ULIDs sort by creation time). Both search engines use
+// this exact order, so the accelerated index and the reference engine never
+// disagree on ties.
+export function compareEntriesNewestFirst(a, b) {
+  if (a.date !== b.date) return a.date < b.date ? 1 : -1;
+  if (a.createdAt !== b.createdAt) return a.createdAt < b.createdAt ? 1 : -1;
+  if (a.id !== b.id) return a.id < b.id ? 1 : -1;
+  return 0;
+}
+
 // Dependency-free full-text scoring: the fraction of query words found in
 // the title, summary, or tags, case-insensitively — no stemming, no
 // ranking beyond that and recency. This is intentionally simple: it is the
@@ -239,7 +250,7 @@ export function searchEntries(entries, query, filters = {}) {
       return { entry, score: hits / words.length };
     })
     .filter((result) => result.score > 0)
-    .sort((a, b) => b.score - a.score || (a.entry.date < b.entry.date ? 1 : -1))
+    .sort((a, b) => b.score - a.score || compareEntriesNewestFirst(a.entry, b.entry))
     .map((result) => result.entry);
 }
 
