@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { readFileSync } from "node:fs";
+import path from "node:path";
 import { setupWorkspace } from "./lib/setup.mjs";
 import { askLocally, forgetServer, initSlack, installLaunchAgent, joinRelay, leaveRelay, listServers, slackDoctor, useServer } from "./lib/slack-ops.mjs";
 import { manifestPath } from "./lib/slack.mjs";
@@ -14,7 +15,7 @@ import {
 function parseArguments(argv) {
   const [command = "help", ...rest] = argv;
   const options = { profiles: [] };
-  if (["slack", "airtable", "cursor"].includes(command) && rest[0] && !rest[0].startsWith("-")) options.subcommand = rest.shift();
+  if (["slack", "airtable", "cursor", "meeting"].includes(command) && rest[0] && !rest[0].startsWith("-")) options.subcommand = rest.shift();
   for (let index = 0; index < rest.length; index += 1) {
     const value = rest[index];
     if (value === "--json") options.json = true;
@@ -30,6 +31,9 @@ function parseArguments(argv) {
     else if (value === "--as") options.as = rest[++index];
     else if (value === "--server") options.server = rest[++index];
     else if (value === "--forget") options.forget = rest[++index];
+    else if (value === "--title") options.title = rest[++index];
+    else if (value === "--engine") options.engine = rest[++index];
+    else if (command === "meeting" && options.subcommand === "process" && !options.file && !value.startsWith("-")) options.file = value;
     else if (command === "slack" && ["ask", "join", "server"].includes(options.subcommand) && !options.question) options.question = value;
     else throw new Error(`Unknown argument: ${value}`);
   }
@@ -57,6 +61,8 @@ Usage:
   nemeda-agent slack join <https://relay-url> [--as NAME] | leave | relay
   nemeda-agent slack server [NAME] [--forget NAME]
   nemeda-agent slack run [--server NAME]      # one runner per relay, side by side
+  nemeda-agent meeting process [FILE] [--title TITLE] [--engine NAME] [--dry-run] [--json]
+  nemeda-agent meeting list [--json]
 
 Commands:
   init     Create missing .nemeda/agent-kit.json and AGENTS.md safely.
@@ -85,6 +91,13 @@ Commands:
              leave     forget the relay pairing on this machine
              relay     run the team relay server (needs the Slack tokens)
              server    list relays, or switch which one this runner uses
+  meeting  Turn finished meeting recordings into filed transcripts (needs a
+           \`meetings\` section in .nemeda/agent-kit.json; see
+           docs/meeting-capture-plan.md).
+             process   transcribe every ready recording in the watched folder
+                       (OBS's recording folder, or NEMEDA_MEETINGS_WATCH), or
+                       one FILE; files <date>-<slug>/ under meetings.transcripts
+             list      show ready, in-progress, and already transcribed recordings
 `;
 }
 
@@ -165,6 +178,39 @@ async function runAirtable(options) {
   console.log("\nAdd this to .nemeda/agent-kit.json:");
   console.log(JSON.stringify(snippet, null, 2));
   return 0;
+}
+
+async function runMeeting(options) {
+  const subcommand = options.subcommand || "list";
+  const { listRecordings, processRecordings } = await import("./lib/meetings.mjs");
+  const cwd = options.cwd || defaultWorkspaceDirectory();
+  if (subcommand === "list") {
+    const listing = listRecordings(cwd, { engine: options.engine });
+    if (options.json) {
+      print(listing, true);
+      return 0;
+    }
+    console.log(`Nemeda Agent Kit meetings at ${listing.root}`);
+    console.log(`Recordings folder: ${listing.watch || "not configured (set NEMEDA_MEETINGS_WATCH in .env.local)"}`);
+    console.log(`Engine: ${listing.engine}${listing.model ? ` (model ${listing.model})` : " (no model found)"}`);
+    const describe = (entry) => `${entry.path} (${(entry.size / 1024 / 1024).toFixed(0)} MB)`;
+    console.log(`\nReady (${listing.ready.length}):`);
+    for (const entry of listing.ready) console.log(`  ${describe(entry)}`);
+    if (listing.pending.length) {
+      console.log(`\nStill being written (${listing.pending.length}):`);
+      for (const entry of listing.pending) console.log(`  ${describe(entry)}`);
+    }
+    console.log(`\nTranscribed (${listing.processed.length}):`);
+    for (const entry of listing.processed.slice(-10)) console.log(`  ${path.basename(entry.path)} -> ${entry.transcript}/`);
+    if (listing.ready.length) console.log("\nRun `nemeda-agent meeting process` to transcribe the ready recordings.");
+    return 0;
+  }
+  if (subcommand === "process") {
+    const report = processRecordings(cwd, { file: options.file, title: options.title, engine: options.engine, dryRun: Boolean(options.dryRun) });
+    printReport(report, options, `Nemeda Agent Kit meeting process${report.dryRun ? " (dry run)" : ""} at ${report.root}`);
+    return report.actions.some((entry) => entry.status === "error") ? 1 : 0;
+  }
+  throw new Error(`Unknown meeting subcommand: ${subcommand}; use process or list.`);
 }
 
 async function runSlack(options) {
@@ -282,6 +328,12 @@ export function run(argv = process.argv.slice(2)) {
     }
     if (command === "airtable") {
       return runAirtable(options).catch((error) => {
+        console.error(`nemeda-agent: ${error instanceof Error ? error.message : String(error)}`);
+        return 2;
+      });
+    }
+    if (command === "meeting") {
+      return runMeeting(options).catch((error) => {
         console.error(`nemeda-agent: ${error instanceof Error ? error.message : String(error)}`);
         return 2;
       });

@@ -286,12 +286,52 @@ function validateSlack(slack, issues) {
   }
 }
 
+const MEETINGS_LANGUAGE_PATTERN = /^(auto|[a-z]{2,3}(-[A-Za-z]{2,4})?)$/;
+
+function validateMeetings(meetings, issues) {
+  if (!isObject(meetings)) {
+    issues.push({ level: "error", code: "invalid-meetings", message: "meetings must be an object." });
+    return;
+  }
+  validateAllowedKeys(meetings, ["inbox", "transcripts", "notes", "language", "naming", "knowledgeLog", "recordings"], "meetings", issues);
+  for (const field of ["inbox", "transcripts", "notes"]) {
+    const value = meetings[field];
+    if (value === undefined && field !== "transcripts") continue;
+    if (!isRelativeInsidePath(value)) {
+      issues.push({ level: "error", code: "invalid-meetings", message: `meetings.${field} must be a relative path inside the workspace.` });
+    }
+  }
+  if (meetings.language !== undefined && (typeof meetings.language !== "string" || !MEETINGS_LANGUAGE_PATTERN.test(meetings.language))) {
+    issues.push({ level: "error", code: "invalid-meetings", message: "meetings.language must be a language code (es, en, pt-BR) or auto." });
+  }
+  if (meetings.naming !== undefined) {
+    const unknownTokens = typeof meetings.naming === "string" ? (meetings.naming.match(/\{[^}]*\}/g) || []).filter((token) => !["{date}", "{time}", "{slug}"].includes(token)) : [];
+    if (typeof meetings.naming !== "string" || !meetings.naming.includes("{date}") || unknownTokens.length || /[\\/:*?"<>|]/.test(meetings.naming)) {
+      issues.push({ level: "error", code: "invalid-meetings", message: "meetings.naming must contain {date}, may use {time} and {slug}, and no path or reserved characters." });
+    }
+  }
+  if (meetings.knowledgeLog !== undefined && typeof meetings.knowledgeLog !== "boolean") {
+    issues.push({ level: "error", code: "invalid-meetings", message: "meetings.knowledgeLog must be a boolean." });
+  }
+  if (meetings.recordings !== undefined) {
+    if (!isObject(meetings.recordings) || !["local", "archive", "delete"].includes(meetings.recordings.keep)) {
+      issues.push({ level: "error", code: "invalid-meetings", message: "meetings.recordings.keep must be local, archive, or delete." });
+    } else {
+      validateAllowedKeys(meetings.recordings, ["keep", "afterDays"], "meetings.recordings", issues);
+      const days = meetings.recordings.afterDays;
+      if (meetings.recordings.keep === "delete" && (!Number.isInteger(days) || days < 1 || days > 365)) {
+        issues.push({ level: "error", code: "invalid-meetings", message: "meetings.recordings.afterDays must be an integer between 1 and 365 when keep is delete." });
+      }
+    }
+  }
+}
+
 export function validateConfig(config) {
   const issues = [];
   if (!isObject(config)) {
     return [{ level: "error", code: "invalid-root", message: "Configuration must be a JSON object." }];
   }
-  validateAllowedKeys(config, ["schemaVersion", "project", "repository", "workspace", "context", "tools", "policies", "drive", "airtable", "slack"], "configuration", issues);
+  validateAllowedKeys(config, ["schemaVersion", "project", "repository", "workspace", "context", "tools", "policies", "drive", "airtable", "slack", "meetings"], "configuration", issues);
   if (config.schemaVersion !== CONFIG_SCHEMA_VERSION) {
     issues.push({
       level: "error",
@@ -345,6 +385,7 @@ export function validateConfig(config) {
   if (config.drive !== undefined) validateDrive(config.drive, issues);
   if (config.airtable !== undefined) validateAirtable(config.airtable, issues);
   if (config.slack !== undefined) validateSlack(config.slack, issues);
+  if (config.meetings !== undefined) validateMeetings(config.meetings, issues);
   if (!isObject(config.context)) {
     issues.push({ level: "error", code: "missing-context", message: "context must be an object." });
   } else {
@@ -835,6 +876,10 @@ export function formatContextForHook(context) {
   }
   if (context.config.context?.documents?.length) {
     lines.push(`Reference documents (read on demand, not injected): ${context.config.context.documents.join(", ")}.`);
+  }
+  if (context.config.meetings) {
+    const meetings = context.config.meetings;
+    lines.push(`Meetings: the kit files one folder per transcribed recording under ${meetings.transcripts}/ (transcript.txt, transcript.srt, transcript.json, meta.json)${meetings.notes ? `; meeting notes go to ${meetings.notes}/` : ""}. New recordings are transcribed with \`nemeda-agent meeting process\`; never transcribe or copy them by hand.`);
   }
   if (context.config.airtable?.tasks) {
     lines.push(`Airtable tasks: base ${context.config.airtable.baseId}, table ${context.config.airtable.tasks.tableId}.`);

@@ -277,6 +277,63 @@
           "default": 240
         }
       }
+    },
+    "meetings": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["transcripts"],
+      "description": "Meeting capture: where the kit files transcripts and notes produced from recordings. Machine-local settings (recordings folder, engine, model) live in .env.local.",
+      "properties": {
+        "inbox": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Workspace-relative folder on the shared drive where recorders drop finished recordings for a transcriber (team roles, phase 3)."
+        },
+        "transcripts": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Workspace-relative folder that receives one <date>-<slug>/ folder per transcribed recording; normally inside the docs Drive link."
+        },
+        "notes": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Workspace-relative folder for the meeting notes documents generated from transcripts."
+        },
+        "language": {
+          "type": "string",
+          "pattern": "^(auto|[a-z]{2,3}(-[A-Za-z]{2,4})?)$",
+          "description": "Spoken language passed to the engine, or auto. Defaults to policies.conversationLanguage."
+        },
+        "naming": {
+          "type": "string",
+          "pattern": "\\{date\\}",
+          "default": "{date}-{slug}",
+          "description": "Transcript folder name template; {date}, {time}, and {slug} are replaced."
+        },
+        "knowledgeLog": {
+          "type": "boolean",
+          "default": false,
+          "description": "Create one Knowledge Log entry per transcribed meeting when the airtable section exists."
+        },
+        "recordings": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["keep"],
+          "properties": {
+            "keep": {
+              "enum": ["local", "archive", "delete"],
+              "default": "local",
+              "description": "What happens to the original recording after a transcript exists."
+            },
+            "afterDays": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 365,
+              "description": "Required with keep = delete: days to wait after the transcript exists."
+            }
+          }
+        }
+      }
     }
   },
   "oneOf": [

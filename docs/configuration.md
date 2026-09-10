@@ -336,6 +336,55 @@ the `airtable` config snippet to paste into `.nemeda/agent-kit.json`. Needs an
 `AIRTABLE_API_KEY` with the `schema.bases:write` scope; the workspace id is in
 the airtable.com URL.
 
+## Meeting capture (`meetings`)
+
+Turns finished meeting recordings into transcripts filed on the shared drive.
+Optional; omit it and `nemeda-agent meeting` refuses to run. Design and
+roadmap in [meeting-capture-plan.md](meeting-capture-plan.md); this is what
+phase 1 ships.
+
+```json
+"meetings": {
+  "transcripts": "docs/transcripts",
+  "notes": "docs/meetings",
+  "language": "es",
+  "naming": "{date}-{slug}"
+}
+```
+
+- `transcripts` (required): workspace-relative folder that receives one
+  `<date>-<slug>/` folder per recording, with `transcript.txt`,
+  `transcript.srt`, `transcript.json` (normalised segments), and
+  `meta.json` (source, checksum, duration, engine, model, language, host).
+  Put it inside the `docs` Drive link so the whole team gets it.
+- `notes`: folder for the meeting notes generated from transcripts (later
+  phase; validated now so the taxonomy is stable).
+- `language`: language code or `auto`; defaults to
+  `policies.conversationLanguage`.
+- `naming`: folder template; `{date}` is required, `{time}` and `{slug}`
+  optional. The slug comes from `--title`, sanitised to the strictest shared
+  drive's character set.
+- `inbox`, `knowledgeLog`, `recordings`: reserved for the team-roles and
+  notes phases; accepted and validated, not yet acted on.
+
+Machine-local settings go in `.env.local`, never in the shared config:
+
+```
+NEMEDA_MEETINGS_WATCH=/Users/me/Movies        # default: OBS's recording folder from its active profile
+NEMEDA_MEETINGS_ENGINE=whisper-cpp             # the only engine in phase 1
+NEMEDA_WHISPER_BIN=whisper-cli                 # default: whisper-cli on PATH
+NEMEDA_WHISPER_MODEL=~/whisper-models/ggml-large-v3-turbo.bin   # default: first ggml-*.bin in ~/.nemeda/models/
+NEMEDA_MEETINGS_THREADS=8                      # default: all cores
+```
+
+`nemeda-agent meeting list` shows what is ready (untouched for 60 seconds),
+still being written, and already transcribed. `nemeda-agent meeting process`
+transcribes every ready recording, or one file passed explicitly
+(`--title` names it); it needs `ffmpeg` and `whisper-cli` on `PATH`.
+Every recording is processed once (`.nemeda/state/meetings.json`), existing
+transcript folders are never overwritten (a second recording with the same
+name gets a numeric suffix), and the original recording is left where it was.
+
 ## Rules
 
 - Paths are relative to the directory containing `.nemeda/`.
