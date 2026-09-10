@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, utimesSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -36,6 +37,9 @@ function makeWorkspace(cfg = config()) {
   writeFileSync(path.join(root, "AGENTS.md"), "# Acme\n");
   mkdirSync(path.join(root, cfg.meetings.transcripts), { recursive: true });
   if (cfg.meetings.notes) mkdirSync(path.join(root, cfg.meetings.notes), { recursive: true });
+  // The memory author is git config user.email of the workspace, as in production.
+  execFileSync("git", ["init", "-q"], { cwd: root });
+  execFileSync("git", ["config", "user.email", "ana@example.com"], { cwd: root });
   return root;
 }
 
@@ -87,7 +91,6 @@ process.stdin.on("end", () => {
     // Only the stubs and node itself (for the #!/usr/bin/env node shebangs).
     PATH: noBackend ? path.dirname(process.execPath) : `${binDir}${path.delimiter}${path.dirname(process.execPath)}`,
     HOME: temporaryDirectory(),
-    GIT_AUTHOR_EMAIL: "ana@example.com",
     NEMEDA_MEETINGS_ENGINE: "whisper-cpp",
     NEMEDA_FFMPEG_BIN: ffmpeg,
     NEMEDA_WHISPER_BIN: whisper,

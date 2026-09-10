@@ -145,7 +145,8 @@ export function recordMeetingMemory(resolved, transcriptFolder, meta, notes, { a
     title,
     summary,
     date,
-    author: resolved.environment.GIT_AUTHOR_EMAIL || undefined,
+    // No author override: the entry must land in the journal of git config
+    // user.email, the only one `memory review` lets this machine revise.
     tags: ["meeting"],
     source: {
       kind: "meeting",
@@ -157,7 +158,7 @@ export function recordMeetingMemory(resolved, transcriptFolder, meta, notes, { a
     }
   });
   if (!entry) {
-    actions.push(action("memory", "skipped", "Project memory not configured (or no git user.email); add a `memory` section to log meetings."));
+    actions.push(action("memory", "skipped", "Project memory not configured, or no git user.email on this machine; add a `memory` section (and `git config user.email`) to log meetings."));
     return null;
   }
   actions.push(action("memory", "created", `Memory entry ${entry.id} in ${path.relative(resolved.root, entry.path)}.`, { memory: entry.id }));
