@@ -305,7 +305,9 @@ test("canonical Airtable schema matches what the hooks write", () => {
     policies: { protectSecrets: true },
     ...snippet
   };
-  assert.deepEqual(validateConfig(config), []);
+  // The snippet still carries airtable.knowledgeLog, which the validator now
+  // flags as deprecated (warn); only errors would make the config unusable.
+  assert.deepEqual(validateConfig(config).filter((issue) => issue.level === "error"), []);
 });
 
 test("scaffold appears in the session context so every AI gets the filing map", async () => {
