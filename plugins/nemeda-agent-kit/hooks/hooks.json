@@ -24,9 +24,9 @@
           },
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/hooks/memory-ledger.mjs\"",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/hooks/memory-ledger.mjs\" --session-start",
             "timeout": 10,
-            "statusMessage": "Recording this session for the memory harvester"
+            "statusMessage": "Recording this session and summarising earlier ones for project memory"
           }
         ]
       }

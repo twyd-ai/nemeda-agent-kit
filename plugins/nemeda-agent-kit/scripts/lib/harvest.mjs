@@ -8,18 +8,21 @@
 // This slice ships the ledger and the harvester core (resume one session,
 // parse its output, file the entries, mark it harvested). Not yet
 // implemented, and explicitly deferred (docs/memory-plan.md phase 1b-iii):
-// the opportunistic detached spawn from SessionStart, `memory install`'s
-// local scheduler, doctor checks, and the SessionStart context line. Also
-// deferred: the "read the raw transcript" fallback for a session that can
-// no longer be resumed — today a failed resume is recorded as a harvest
-// error, never fabricated.
+// `memory install`'s local scheduler and the doctor rows. Also deferred:
+// the "read the raw transcript" fallback for a session that can no longer
+// be resumed — today a failed resume is recorded as a harvest error, never
+// fabricated. The opportunistic trigger (a detached harvest spawned from
+// SessionStart) and the pending-review context line live at the bottom of
+// this file.
 
-import { spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { spawn, spawnSync } from "node:child_process";
+import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { appendEntry, createEntry, journalPath, resolveAuthorEmail, validateEntry } from "./memory.mjs";
 import { parseBackendOutput } from "./slack.mjs";
-import { loadEnvLocal } from "./env.mjs";
+import { flagEnabled, loadEnvLocal } from "./env.mjs";
+import { queryEntries } from "./memory-index.mjs";
 import { readWorkspaceContext, validateConfig } from "./workspace.mjs";
 
 const DEFAULT_IDLE_MINUTES = 30;
@@ -230,4 +233,119 @@ export function harvestSessionById(root, config, sessionId, options = {}) {
   const ledger = readLedger(root);
   const session = ledger[sessionId] ? { sessionId, ...ledger[sessionId] } : { sessionId, tool: "claude" };
   return harvestSession(root, config, session, options);
+}
+
+// ---------------------------------------------------------------------------
+// Opportunistic trigger: SessionStart spawns a detached harvest of the
+// sessions that closed since, so nobody has to remember to run it.
+// ---------------------------------------------------------------------------
+
+// A lock older than this is abandoned regardless of its pid (a machine that
+// slept mid-harvest, a reused pid): an hour is well beyond any real run,
+// which is bounded by maxSessionsPerRun resumes of a couple of minutes each.
+const LOCK_STALE_MS = 60 * 60 * 1000;
+const LOG_ROTATE_BYTES = 512 * 1024;
+const DEFAULT_CLI_PATH = fileURLToPath(new URL("../cli.mjs", import.meta.url));
+
+export function harvestLockPath(root) {
+  return path.join(root, ".nemeda", "state", "harvest.lock");
+}
+
+export function harvestLogPath(root) {
+  return path.join(root, ".nemeda", "state", "harvest.log");
+}
+
+function readLock(root) {
+  try {
+    return JSON.parse(readFileSync(harvestLockPath(root), "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+function processAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    // EPERM: the process exists but belongs to someone else.
+    return error?.code === "EPERM";
+  }
+}
+
+// True only for a lock written by a process that is still alive and not
+// older than LOCK_STALE_MS. The lock lives under .nemeda/state/, which is
+// machine-local, so the pid always refers to this machine.
+export function harvestLockHeld(root, { now = Date.now() } = {}) {
+  const lock = readLock(root);
+  if (!lock || !Number.isInteger(lock.pid)) return false;
+  const age = now - Date.parse(lock.startedAt);
+  return Number.isFinite(age) && age < LOCK_STALE_MS && processAlive(lock.pid);
+}
+
+// One harvest at a time per machine: two concurrent runs would resume the
+// same closed session twice, duplicating its entries and its token cost.
+// Returns a release function, or null when another live run holds the lock.
+// A stale lock (dead pid, or too old) is cleared and taken over.
+export function acquireHarvestLock(root, { now = Date.now() } = {}) {
+  const file = harvestLockPath(root);
+  mkdirSync(path.dirname(file), { recursive: true });
+  if (existsSync(file) && !harvestLockHeld(root, { now })) rmSync(file, { force: true });
+  try {
+    writeFileSync(file, JSON.stringify({ pid: process.pid, startedAt: new Date(now).toISOString() }), { flag: "wx" });
+  } catch (error) {
+    if (error?.code === "EEXIST") return null;
+    throw error;
+  }
+  return () => {
+    if (readLock(root)?.pid === process.pid) rmSync(file, { force: true });
+  };
+}
+
+// Cheap enough for a hook: a flag check, one ledger read, one lock read.
+export function shouldTriggerHarvest(root, config, environment = process.env, { now = Date.now() } = {}) {
+  if (!flagEnabled("MEMORY_HARVEST", environment)) return { trigger: false, reason: "MEMORY_HARVEST is not enabled" };
+  const idleMinutes = config.memory.harvest?.idleMinutes ?? DEFAULT_IDLE_MINUTES;
+  const closed = closedSessions(root, { idleMinutes }).length;
+  if (!closed) return { trigger: false, reason: "no closed sessions to summarise", closed };
+  if (harvestLockHeld(root, { now })) return { trigger: false, reason: "a harvest is already running", closed };
+  return { trigger: true, closed };
+}
+
+// Starts `nemeda-agent memory harvest` fully detached (its own process
+// group, no inherited stdio, unref'd) so the hook that calls this returns
+// immediately and the harvest outlives the hook. Output goes to
+// .nemeda/state/harvest.log, rotated once past LOG_ROTATE_BYTES so it never
+// grows without bound. Returns the child's pid.
+export function spawnDetachedHarvest(root, { environment = process.env, cliPath = DEFAULT_CLI_PATH } = {}) {
+  const logPath = harvestLogPath(root);
+  mkdirSync(path.dirname(logPath), { recursive: true });
+  try {
+    if (statSync(logPath).size > LOG_ROTATE_BYTES) renameSync(logPath, `${logPath}.1`);
+  } catch {
+    // No log yet: nothing to rotate.
+  }
+  appendFileSync(logPath, `\n[${new Date().toISOString()}] background harvest started from SessionStart\n`);
+  const fd = openSync(logPath, "a");
+  try {
+    const child = spawn(process.execPath, [cliPath, "memory", "harvest", "--cwd", root], {
+      cwd: root,
+      detached: true,
+      stdio: ["ignore", fd, fd],
+      env: environment
+    });
+    child.unref();
+    return child.pid;
+  } finally {
+    closeSync(fd);
+  }
+}
+
+// The current author's entries still waiting for `memory review`: harvested
+// sessions and meeting entries both land as pending, and they only become
+// useful memory once someone confirms them.
+export function pendingReviewCount(root, config, environment = process.env) {
+  const author = resolveAuthorEmail(root);
+  if (!author) return 0;
+  return queryEntries(root, config, { filters: { status: "pending", author } }, { environment }).entries.length;
 }

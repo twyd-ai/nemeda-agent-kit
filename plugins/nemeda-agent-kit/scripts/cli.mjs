@@ -494,11 +494,24 @@ async function runMemory(options) {
     if (!flagEnabled("MEMORY_HARVEST", process.env)) {
       throw new Error("MEMORY_HARVEST is not enabled; set MEMORY_HARVEST=true in .env.local to allow harvesting to resume sessions (it invokes the host CLI, and that costs tokens).");
     }
-    const { harvestClosedSessions, harvestSessionById } = await import("./lib/harvest.mjs");
+    const { acquireHarvestLock, harvestClosedSessions, harvestSessionById } = await import("./lib/harvest.mjs");
     const dryRun = Boolean(options.dryRun);
-    const results = options.sessionId
-      ? [harvestSessionById(context.root, context.config, options.sessionId, { dryRun })]
-      : harvestClosedSessions(context.root, context.config, { dryRun });
+    // One harvest per machine at a time: the SessionStart trigger and a manual
+    // run must never resume the same session twice.
+    const release = acquireHarvestLock(context.root);
+    if (!release) {
+      console.error("nemeda-agent: another harvest is already running on this machine; skipping this run.");
+      if (options.json) print([], true);
+      return 0;
+    }
+    let results;
+    try {
+      results = options.sessionId
+        ? [harvestSessionById(context.root, context.config, options.sessionId, { dryRun })]
+        : harvestClosedSessions(context.root, context.config, { dryRun });
+    } finally {
+      release();
+    }
     if (options.json) {
       print(results, true);
       return results.some((result) => !result.ok) ? 1 : 0;
