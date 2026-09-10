@@ -381,9 +381,11 @@ scheduler has to be local.
    only user and assistant text, and summarises it with a fresh `-p` /
    `exec` call. Runs one session at a time, never inside a hook, and bills
    the person's own subscription like the Slack bridge.
-3. **Triggers.** Two, so it works with and without installing anything:
+3. **Triggers — pending.** Two, so it works with and without installing
+   anything; `nemeda-agent memory harvest` itself is shipped, but nothing
+   calls it automatically yet:
    - **Opportunistic**: the `SessionStart` hook, after writing the ledger,
-     spawns `memory harvest --previous` as a *detached* child (`spawn` with
+     spawns `memory harvest` as a *detached* child (`spawn` with
      `detached: true`, `stdio: "ignore"`, `unref()`), so the hook returns
      immediately and yesterday's sessions get summarised while today's
      starts. This alone covers most people: the next session harvests the
@@ -394,10 +396,14 @@ scheduler has to be local.
      Windows — for machines where sessions must be logged the same day even
      if no new session is opened.
 
-The `SessionStart` context line closes the loop: "3 session entries from
-this week are pending your review; run `nemeda-agent memory review` or
-`/memory-log review`". Reviewing an entry whose summary already exists is a
-confirmation, not a writing task, which is what removes the forgetting.
+   Until either lands, running `nemeda-agent memory harvest` is a manual
+   (or externally cron'd) step.
+
+The `SessionStart` context line — pending — closes the loop: "3 session
+entries from this week are pending your review; run
+`nemeda-agent memory review`". Reviewing an entry whose summary already
+exists is a confirmation, not a writing task, which is what removes the
+forgetting.
 
 ### Config and switches
 
@@ -466,7 +472,7 @@ nemeda-agent memory add [--type T] [--title …] [--tags a,b] [--json]   # appen
 nemeda-agent memory list [--pending] [--type T] [--author E] [--since D]     # shipped
 nemeda-agent memory search QUERY [--central] [--json]                       # shipped (no --central yet)
 nemeda-agent memory review [ID] [--all] [--json]                            # shipped; ID completes an entry, no ID lists the inbox
-nemeda-agent memory harvest [--previous] [--session ID] [--dry-run]    # summarise closed sessions — pending (1b-iii)
+nemeda-agent memory harvest [--session ID] [--dry-run] [--json]        # shipped; no flag = every closed session
 nemeda-agent memory install | uninstall                                # local scheduler for harvest — pending (1b-iii)
 nemeda-agent memory index [--rebuild]                                  # refresh the SQLite index — pending (1b-ii)
 nemeda-agent memory sync [--dry-run]                                   # promote to central — pending (phase 3)
@@ -537,10 +543,24 @@ for both sides.
      `memory index --rebuild` (the in-memory engine used everywhere today
      stays correct at any scale this kit is likely to see for a while, so
      this is a performance layer, not a correctness gap).
-   - **1b-iii, pending**: the unattended-capture ledger hooks and harvester
-     ("Unattended capture" above) — a separate, sizeable subsystem (host-CLI
-     resume logic for both Claude Code and Codex, a local scheduler) that
-     deserves its own dedicated slice rather than being folded into 1b-i.
+   - **1b-iii, mostly done**: the unattended-capture ledger hooks
+     (`scripts/hooks/memory-ledger.mjs`, one script wired into both
+     `SessionStart` and `Stop`) and the harvester core
+     (`scripts/lib/harvest.mjs`, `nemeda-agent memory harvest`) — resume a
+     closed session through its host CLI (`claude -p --resume` /
+     `codex exec resume`, reusing `parseBackendOutput` from slack.mjs),
+     parse its JSON answer, file whatever validates, mark the session
+     harvested either way. Gated by `MEMORY_HARVEST=true`; guarded against
+     recursion via `NEMEDA_MEMORY_HARVESTER=1` on the resumed session's
+     environment, so a harvested session can never record or re-harvest
+     itself. Still pending from the original design: the opportunistic
+     detached spawn from `SessionStart` (today `memory harvest` is run by
+     hand or by an external scheduler, not triggered automatically), the
+     "read the raw transcript" fallback for a session that can no longer be
+     resumed (a failed resume is recorded as a harvest error today, never
+     fabricated), `memory install`/`uninstall`'s local scheduler
+     (launchd/systemd/Task Scheduler), the `memory-harvest` doctor check,
+     and the `SessionStart` context line naming pending-review entries.
    - **1b-iv, pending**: `import-airtable`, migrating existing Knowledge Log
      bases into journals.
 2. **Meeting integration** (with `meeting-capture-plan.md` phase 3): the

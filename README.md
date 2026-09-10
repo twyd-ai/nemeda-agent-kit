@@ -60,7 +60,10 @@ project instructions stay in `AGENTS.md`.
   server's `memory_search`/`memory_recent`/`memory_get` tools let any
   session search prior work before proposing something that may already be
   decided; see [memory-plan.md](docs/memory-plan.md) for the design and the
-  optional company-wide database layer.
+  optional company-wide database layer. `SessionStart`/`Stop` hooks also log
+  every session to a local ledger, and `nemeda-agent memory harvest`
+  (opt-in, `MEMORY_HARVEST=true`) resumes closed ones through their own
+  host CLI to summarise sessions people forgot to log by hand.
 - **A personal Slack bridge** (`nemeda-agent slack`): a Socket Mode runner that
   answers questions about your repositories in Slack threads. No infrastructure
   (the connection is outbound, so there is no server, URL, or tunnel), and every

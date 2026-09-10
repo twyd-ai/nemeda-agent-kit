@@ -503,6 +503,37 @@ journals: `memory_search` (full-text, with the same `type`/`author`/
 `status`/`since` filters as the CLI), `memory_recent`, and `memory_get` by
 id. No `central` support yet — see memory-plan.md's phase 1b.
 
+### Unattended capture (`memory.harvest`)
+
+`SessionStart` and `Stop` hooks record every session against a repository
+with a `memory` section in `.nemeda/state/sessions.json` (which host, which
+model, when it started, when it was last active) — free, no model call,
+always on. `nemeda-agent memory harvest [--session ID] [--dry-run]`
+resumes each closed session (idle 30 minutes by default) through its own
+host CLI — `claude -p --resume` or `codex exec resume` — with a prompt
+asking for JSON project-memory entries, files whatever validates, and marks
+the session harvested either way, so a permanently broken session is never
+retried forever.
+
+```json
+"memory": {
+  "harvest": { "idleMinutes": 30, "maxSessionsPerRun": 5, "hosts": ["claude", "codex"] }
+}
+```
+
+All three keys are optional and default to what is shown. **Harvesting
+itself never runs unless `MEMORY_HARVEST=true` is set in `.env.local`** —
+it invokes the host CLI and therefore costs tokens; recording activity in
+the ledger is free and always on regardless of that flag.
+`NEMEDA_CLAUDE_BIN` / `NEMEDA_CODEX_BIN` in `.env.local` override which
+binary runs, for a non-default install or for tests.
+
+Nothing calls `memory harvest` automatically yet — no opportunistic trigger
+from `SessionStart`, no `memory install` scheduler, no doctor check, no
+`SessionStart` context line naming what is pending review. Run it by hand,
+or from your own cron/scheduled task, until that lands; see
+memory-plan.md's phase 1b-iii for the design.
+
 `airtable.knowledgeLog` still works but is deprecated in favor of this
 section (`nemeda-agent doctor` reports it); it will be removed once the
 central layer ships.
