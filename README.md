@@ -54,9 +54,13 @@ project instructions stay in `AGENTS.md`.
   Knowledge Log: session summaries, decisions, findings, and meeting
   outcomes as append-only, per-author journals on the shared drive — safe
   with Google Drive and OneDrive sync clients, unlike a single shared
-  database file. `memory add`/`list`/`search` work with no Airtable
-  dependency at all; see [memory-plan.md](docs/memory-plan.md) for the
-  design and the optional company-wide database layer.
+  database file. `memory add`/`list`/`search`/`review` work with no
+  Airtable dependency at all, the `memory-log` skill is the portable
+  replacement for the per-project Drive `klog.md` commands, and the MCP
+  server's `memory_search`/`memory_recent`/`memory_get` tools let any
+  session search prior work before proposing something that may already be
+  decided; see [memory-plan.md](docs/memory-plan.md) for the design and the
+  optional company-wide database layer.
 - **A personal Slack bridge** (`nemeda-agent slack`): a Socket Mode runner that
   answers questions about your repositories in Slack threads. No infrastructure
   (the connection is outbound, so there is no server, URL, or tunnel), and every

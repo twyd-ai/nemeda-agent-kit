@@ -486,6 +486,23 @@ Entries are attributed to `git config user.email`; `nemeda-agent doctor`
 checks the folder resolves through Drive, this author's journal is
 writable, and flags sync-client conflict copies in `journal/`.
 
+`nemeda-agent memory review [ID] [--all]` completes a `pending` entry into
+`reviewed`, optionally with changes (`summary`, `clientSummary`, `tags`, ...)
+as JSON on stdin; with no ID it lists the pending inbox, author-scoped by
+default (`--all` lists everyone's, for visibility). **Only the entry's own
+author can review it** — a journal has exactly one writer by design, so a
+different machine appending a revision to someone else's journal file would
+reintroduce the concurrent-write problem journals exist to avoid. The
+`memory-log` skill drives the confirm-before-write reviewed-logging flow
+end to end (portable replacement for the per-project Drive `klog.md`
+commands); `nemeda-agent doctor` and its Airtable-based predecessor keep
+working during the migration window.
+
+The kit's MCP server exposes three read-only tools backed by the same
+journals: `memory_search` (full-text, with the same `type`/`author`/
+`status`/`since` filters as the CLI), `memory_recent`, and `memory_get` by
+id. No `central` support yet — see memory-plan.md's phase 1b.
+
 `airtable.knowledgeLog` still works but is deprecated in favor of this
 section (`nemeda-agent doctor` reports it); it will be removed once the
 central layer ships.

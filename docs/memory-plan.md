@@ -290,15 +290,24 @@ Machine-local (`.env.local`): `NEMEDA_MEMORY_DB_URL` (personal),
    step 6) appends a `meeting` entry with the notes summary and a `source`
    pointing at the transcript folder, through `recordEntry` (see "Cross-
    feature integration" below) rather than the journal primitives directly.
-4. **Review inbox** — `nemeda-agent memory review` lists `pending` entries
-   for the current author (or `--all`), opens each for completion through
-   the local agent (same backend invocation as the Slack bridge and the
-   meeting notes), and appends the `reviewed` revision.
-5. **Query from any session** — the kit's MCP server gains read-only tools
-   backed by the local index: `memory_search`, `memory_recent`, `memory_get`,
-   and, when `central` is configured and `psql` is available, runs the same
-   query against `entries_current` and merges results with a
-   `scope: project | central` label.
+4. **Review inbox** — `nemeda-agent memory review` with no id lists `pending`
+   entries (the current author's by default, `--all` for visibility across
+   the team); with an id it appends the `reviewed` revision, optionally with
+   changes as JSON on stdin. **Only the entry's own author can review it**:
+   a journal has exactly one writer by design, so letting a different
+   machine append a revision to someone else's journal file would
+   reintroduce the concurrent-write problem journals exist to avoid — an
+   invariant worth stating once here since it is easy to miss when reading
+   only the CLI surface. Opening each entry for completion *through the
+   local agent* (an automated first-draft summary, not just a human typing
+   one) is not implemented yet; today's version is the confirm-and-write
+   primitive, driven by a human or by the `memory-log` skill.
+5. **Query from any session** — the kit's MCP server exposes three
+   read-only tools backed by the journals directly (no SQLite index yet —
+   see phase 1b below): `memory_search` (same `type`/`author`/`status`/
+   `since` filters as the CLI), `memory_recent`, and `memory_get` by id.
+   `central` scope (merging in `entries_current` when `psql` is available)
+   is not implemented yet.
    `workspace-context` tells the agent these exist and when to use them
    ("before proposing an architecture decision, search memory for prior
    resolutions").
@@ -453,17 +462,17 @@ feature calling it — say so explicitly rather than changing it quietly.
 ## CLI surface (`nemeda-agent memory`)
 
 ```
-nemeda-agent memory add [--type T] [--title …] [--tags a,b] [--json]   # append one entry
-nemeda-agent memory list [--pending] [--type T] [--author E] [--since D]
-nemeda-agent memory search QUERY [--central] [--json]
-nemeda-agent memory review [--all]                                     # complete pending entries
-nemeda-agent memory harvest [--previous] [--session ID] [--dry-run]    # summarise closed sessions
-nemeda-agent memory install | uninstall                                # local scheduler for harvest
-nemeda-agent memory index [--rebuild]                                  # refresh the SQLite index
-nemeda-agent memory sync [--dry-run]                                   # promote to central
-nemeda-agent memory recap --period P [--scope project|central]
-nemeda-agent memory import-airtable [--base app…] [--dry-run]
-nemeda-agent memory doctor [--json]
+nemeda-agent memory add [--type T] [--title …] [--tags a,b] [--json]   # append one entry — shipped
+nemeda-agent memory list [--pending] [--type T] [--author E] [--since D]     # shipped
+nemeda-agent memory search QUERY [--central] [--json]                       # shipped (no --central yet)
+nemeda-agent memory review [ID] [--all] [--json]                            # shipped; ID completes an entry, no ID lists the inbox
+nemeda-agent memory harvest [--previous] [--session ID] [--dry-run]    # summarise closed sessions — pending (1b-iii)
+nemeda-agent memory install | uninstall                                # local scheduler for harvest — pending (1b-iii)
+nemeda-agent memory index [--rebuild]                                  # refresh the SQLite index — pending (1b-ii)
+nemeda-agent memory sync [--dry-run]                                   # promote to central — pending (phase 3)
+nemeda-agent memory recap --period P [--scope project|central]              # pending (phase 3)
+nemeda-agent memory import-airtable [--base app…] [--dry-run]               # pending (1b-iv)
+nemeda-agent memory doctor [--json]                                    # pending; today's checks live under `nemeda-agent doctor`
 ```
 
 ## Doctor
@@ -519,11 +528,21 @@ for both sides.
      `memory-journal`, `memory-conflicts`), the `airtable.knowledgeLog`
      deprecation warning, `recordEntry` for other features to call, and
      docs.
-   - **1b, pending**: the SQLite/`sqlite3`-CLI/in-memory-fallback index and
-     `memory index`, `memory review`, the `memory-log` skill (portable
-     replacement for the Drive `klog.md` commands), the unattended-capture
-     ledger hooks and harvester ("Unattended capture" above), the
-     `workspace_context` MCP read tools, and `import-airtable`.
+   - **1b-i, done**: `nemeda-agent memory review` (with the single-writer
+     safety check above), the `memory-log` skill (portable replacement for
+     the Drive `klog.md` commands), and the MCP server's `memory_search`/
+     `memory_recent`/`memory_get` tools — all reading straight through the
+     in-memory reference engine, no SQLite index yet.
+   - **1b-ii, pending**: the SQLite/`sqlite3`-CLI accelerated index and
+     `memory index --rebuild` (the in-memory engine used everywhere today
+     stays correct at any scale this kit is likely to see for a while, so
+     this is a performance layer, not a correctness gap).
+   - **1b-iii, pending**: the unattended-capture ledger hooks and harvester
+     ("Unattended capture" above) — a separate, sizeable subsystem (host-CLI
+     resume logic for both Claude Code and Codex, a local scheduler) that
+     deserves its own dedicated slice rather than being folded into 1b-i.
+   - **1b-iv, pending**: `import-airtable`, migrating existing Knowledge Log
+     bases into journals.
 2. **Meeting integration** (with `meeting-capture-plan.md` phase 3): the
    pipeline writes `meeting` entries; `meeting-summary.md` retired.
 3. **Central connection** (0.5.0): `psql` adapter, `memory sync`, central
