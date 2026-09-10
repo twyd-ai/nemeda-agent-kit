@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+import path from "node:path";
+import { filterEntries, latestRevisions, readAllJournals, searchEntries } from "./lib/memory.mjs";
 import {
   defaultWorkspaceDirectory,
   loadSchema,
@@ -7,6 +9,13 @@ import {
 } from "./lib/workspace.mjs";
 
 const SERVER_INFO = { name: "nemeda-agent-kit", version: "0.3.0" };
+
+const memoryFilterProperties = {
+  type: { type: "string", enum: ["ai-interaction", "decision", "finding", "meeting"], description: "Restrict to one entry type." },
+  author: { type: "string", description: "Restrict to one author's email." },
+  status: { type: "string", enum: ["pending", "reviewed"], description: "Restrict to one review status." },
+  since: { type: "string", description: "Only entries on or after this date (YYYY-MM-DD)." }
+};
 
 const tools = [
   {
@@ -31,8 +40,67 @@ const tools = [
     name: "workspace_config_schema",
     description: "Return the JSON Schema for .nemeda/agent-kit.json.",
     inputSchema: { type: "object", properties: {}, additionalProperties: false }
+  },
+  {
+    name: "memory_search",
+    description: "Full-text search this project's memory (session summaries, decisions, findings, meeting outcomes) across every author's journal. Search before proposing something that may already have been decided or found.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        cwd: { type: "string", description: "Current repository or subdirectory." },
+        query: { type: "string", description: "Search text; omit or leave empty to just apply the filters." },
+        ...memoryFilterProperties
+      },
+      additionalProperties: false
+    }
+  },
+  {
+    name: "memory_recent",
+    description: "The most recent project memory entries, newest first, optionally filtered.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        cwd: { type: "string", description: "Current repository or subdirectory." },
+        limit: { type: "integer", minimum: 1, maximum: 200, default: 20 },
+        ...memoryFilterProperties
+      },
+      additionalProperties: false
+    }
+  },
+  {
+    name: "memory_get",
+    description: "Read one project memory entry by id (its latest revision).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        cwd: { type: "string", description: "Current repository or subdirectory." },
+        id: { type: "string", description: "Entry id, as returned by memory_search, memory_recent, or `nemeda-agent memory list`." }
+      },
+      required: ["id"],
+      additionalProperties: false
+    }
   }
 ];
+
+// Shared by every memory_* tool: resolves the project's memory folder from
+// the workspace config and returns every entry's latest revision, freshest
+// first. Read-only, same trust boundary as workspace_context/doctor — never
+// writes, and returns a clear `error` string (not a thrown exception) when
+// memory is not configured, so a tool call always gets a JSON answer.
+function loadMemoryEntries(cwd) {
+  const context = readWorkspaceContext(cwd);
+  if (context.mode !== "configured" || !context.config?.memory) {
+    return { error: "No `memory` section in .nemeda/agent-kit.json for this repository; see docs/memory-plan.md." };
+  }
+  const memoryRoot = path.join(context.root, context.config.memory.project.path);
+  const { entries: raw, malformed } = readAllJournals(memoryRoot);
+  const entries = latestRevisions(raw).sort((a, b) => (a.date < b.date ? 1 : -1));
+  return { entries, malformed, root: context.root, memoryRoot };
+}
+
+function memoryFilters(args) {
+  return { type: args.type, author: args.author, status: args.status, since: args.since };
+}
 
 function send(message) {
   process.stdout.write(`${JSON.stringify(message)}\n`);
@@ -47,6 +115,23 @@ function toolResult(name, args = {}) {
   if (name === "workspace_context") return textResult(readWorkspaceContext(cwd));
   if (name === "workspace_doctor") return textResult(workspaceDoctor(cwd));
   if (name === "workspace_config_schema") return textResult(loadSchema());
+  if (name === "memory_search") {
+    const { entries, error } = loadMemoryEntries(cwd);
+    if (error) return textResult({ error }, true);
+    return textResult({ results: searchEntries(entries, args.query || "", memoryFilters(args)) });
+  }
+  if (name === "memory_recent") {
+    const { entries, error } = loadMemoryEntries(cwd);
+    if (error) return textResult({ error }, true);
+    const limit = Number.isInteger(args.limit) ? Math.min(Math.max(args.limit, 1), 200) : 20;
+    return textResult({ results: filterEntries(entries, memoryFilters(args)).slice(0, limit) });
+  }
+  if (name === "memory_get") {
+    const { entries, error } = loadMemoryEntries(cwd);
+    if (error) return textResult({ error }, true);
+    const entry = entries.find((candidate) => candidate.id === args.id);
+    return entry ? textResult(entry) : textResult({ error: `No memory entry with id ${args.id}.` }, true);
+  }
   return textResult({ error: `Unknown tool: ${name}` }, true);
 }
 
