@@ -38,11 +38,13 @@ function parseArguments(argv) {
     else if (value === "--author") options.author = rest[++index];
     else if (value === "--since") options.since = rest[++index];
     else if (value === "--pending") options.pending = true;
+    else if (value === "--all") options.all = true;
     else if (value === "--model") options.model = rest[++index];
     else if (value === "--obs") options.obs = true;
     else if (value === "--yes" || value === "-y") options.yes = true;
     else if (command === "meeting" && options.subcommand === "process" && !options.file && !value.startsWith("-")) options.file = value;
     else if (command === "memory" && options.subcommand === "search" && !options.query && !value.startsWith("-")) options.query = value;
+    else if (command === "memory" && options.subcommand === "review" && !options.reviewId && !value.startsWith("-")) options.reviewId = value;
     else if (command === "slack" && ["ask", "join", "server"].includes(options.subcommand) && !options.question) options.question = value;
     else throw new Error(`Unknown argument: ${value}`);
   }
@@ -77,6 +79,7 @@ Usage:
   nemeda-agent memory add [--type TYPE] [--title TITLE] [--tags a,b] [--json]
   nemeda-agent memory list [--pending] [--type TYPE] [--author EMAIL] [--since DATE] [--json]
   nemeda-agent memory search "query" [--pending] [--type TYPE] [--json]
+  nemeda-agent memory review [ID] [--all] [--json]
 
 Commands:
   init     Create missing .nemeda/agent-kit.json and AGENTS.md safely.
@@ -127,6 +130,11 @@ Commands:
                        author is always this machine's \`git config user.email\`
              list      list entries, newest first
              search    full-text search across every author's journal
+             review    no ID: list your own pending entries (--all for
+                       everyone's, browsing only); with ID: complete one of
+                       your own pending entries, optionally with changes as
+                       JSON on stdin. Only the original author can review an
+                       entry — a journal has exactly one writer by design.
 `;
 }
 
@@ -387,7 +395,54 @@ async function runMemory(options) {
     return 0;
   }
 
-  throw new Error(`Unknown memory subcommand: ${subcommand}; use add, list, or search.`);
+  if (subcommand === "review") {
+    const author = memoryLib.resolveAuthorEmail(context.root);
+    if (!options.reviewId) {
+      // No id: list the pending inbox. Author-scoped by default — reviewing
+      // is always self-service (see below) — --all is for visibility only,
+      // e.g. a lead checking the whole team's backlog.
+      const pending = memoryLib.filterEntries(entries, { status: "pending", author: options.all ? undefined : author });
+      if (options.json) {
+        print(pending, true);
+        return 0;
+      }
+      console.log(`Pending entries${options.all ? "" : ` for ${author || "(no git email set)"}`}: ${pending.length}`);
+      for (const entry of pending) console.log(summarizeMemoryEntry(entry));
+      return 0;
+    }
+    const entry = entries.find((candidate) => candidate.id === options.reviewId);
+    if (!entry) throw new Error(`No memory entry with id ${options.reviewId}.`);
+    if (entry.status !== "pending") throw new Error(`Entry ${entry.id} is already "${entry.status}"; nothing to review.`);
+    if (!author) throw new Error("git config user.email is not set; the kit needs it to attribute the review.");
+    if (entry.author !== author) {
+      // A journal has exactly one writer by design (see memory.mjs): letting
+      // a different machine append a revision to someone else's journal
+      // file is exactly the concurrent-write pattern that breaks under
+      // Google Drive / OneDrive sync. Only the original author reviews.
+      throw new Error(`Entry ${entry.id} belongs to ${entry.author}; only they can review it (ask them to run this, or pass --all just to look, not to review).`);
+    }
+    const stdin = (await readStdin()).trim();
+    let changes = { status: "reviewed" };
+    if (stdin) {
+      try {
+        changes = { ...JSON.parse(stdin), status: "reviewed" };
+      } catch (error) {
+        throw new Error(`memory review: stdin is not valid JSON (${error instanceof Error ? error.message : String(error)}).`);
+      }
+    }
+    const revised = memoryLib.reviseEntry(entry, changes);
+    const errors = memoryLib.validateEntry(revised);
+    if (errors.length) throw new Error(`Invalid review: ${errors.join("; ")}`);
+    memoryLib.appendEntry(memoryRoot, revised);
+    if (options.json) {
+      print(revised, true);
+      return 0;
+    }
+    console.log(`Reviewed ${summarizeMemoryEntry(revised)}`);
+    return 0;
+  }
+
+  throw new Error(`Unknown memory subcommand: ${subcommand}; use add, list, search, or review.`);
 }
 
 async function runSlack(options) {
