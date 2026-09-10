@@ -503,6 +503,25 @@ journals: `memory_search` (full-text, with the same `type`/`author`/
 `status`/`since` filters as the CLI), `memory_recent`, and `memory_get` by
 id. No `central` support yet — see memory-plan.md's phase 1b.
 
+### Query index
+
+`memory list`, `memory search`, and the MCP `memory_*` tools answer through a
+machine-local SQLite cache at `.nemeda/state/memory.sqlite`. It is never on
+the shared drive — every machine builds its own from the journals, which
+remain the only source of truth — and it is gitignored with the rest of
+`.nemeda/state/`. It rebuilds itself whenever any journal changes, so there
+is nothing to maintain; deleting it is always safe.
+
+The engine is picked automatically: `node:sqlite` when the Node runtime has
+it (22.13+), else the `sqlite3` binary, else no index at all and every query
+reads the journals directly. All three return identical results in the
+same order. If the index engine fails, the query is answered from the
+journals and the CLI says so on stderr. `nemeda-agent memory index` shows the
+engine and whether the index is up to date; `--rebuild` forces a rebuild.
+`NEMEDA_SQLITE_BIN` points at a non-default `sqlite3`, and
+`NEMEDA_MEMORY_INDEX_ENGINE` (`node-sqlite`, `sqlite3-cli`, `memory`) pins
+one engine.
+
 ### Unattended capture (`memory.harvest`)
 
 `SessionStart` and `Stop` hooks record every session against a repository

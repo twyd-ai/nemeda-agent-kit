@@ -85,12 +85,22 @@ clients handle perfectly because each file has exactly one writer:
 - One JSONL file per `git config user.email`; the kit only ever appends to
   the file of the person running it. Revisions (review, tag change) are new
   lines with the same `id` and a later `revision`; the newest wins.
-- **SQLite is the query layer**, rebuilt from the journals on demand and kept
-  in the machine-local `.nemeda/state/memory.sqlite` (never on the drive):
-  full-text search (FTS5), filters by type/author/date/tag, and the
-  `pending` inbox. Rebuild is incremental (journal file size + mtime, like
-  the hook throttles) and takes milliseconds for thousands of entries.
-- Engine: `node:sqlite` when the runtime is Node ≥ 22.5, else the `sqlite3`
+- **SQLite is the query layer**, rebuilt from the journals on demand and
+  kept in the machine-local `.nemeda/state/memory.sqlite` — never on the
+  drive (confirmed 2026-09-10): each machine builds its own copy, because a
+  sync client would reintroduce the cross-machine locking problem the
+  journals exist to avoid, and a rebuild costs milliseconds. It holds the
+  latest revision of every entry with the same filters as the CLI
+  (type/author/status/since/tag). It is rebuilt only when the journal
+  fingerprint (each file's name, size, and mtime) changes — a full rebuild
+  into a temp file renamed into place, not per-row updates — so a reader in
+  another process never sees a half-written index. Search deliberately
+  matches the reference engine instead of using FTS5: FTS matches whole
+  tokens, so "drive" would stop finding "OneDrive"; storing the same
+  lowercased haystack and scoring with `instr()` keeps every engine's
+  results and order identical.
+- Engine: `node:sqlite` when the runtime has it unflagged (Node 22.13+ /
+  23.4+), else the `sqlite3`
   CLI through `child_process` (present by default on macOS and most Linux;
   on Windows `doctor` explains how to get it). When neither exists the kit
   falls back to scanning the journals in memory — slower, same results —
@@ -474,7 +484,7 @@ nemeda-agent memory search QUERY [--central] [--json]                       # sh
 nemeda-agent memory review [ID] [--all] [--json]                            # shipped; ID completes an entry, no ID lists the inbox
 nemeda-agent memory harvest [--session ID] [--dry-run] [--json]        # shipped; no flag = every closed session
 nemeda-agent memory install | uninstall                                # local scheduler for harvest — pending (1b-iii)
-nemeda-agent memory index [--rebuild]                                  # refresh the SQLite index — pending (1b-ii)
+nemeda-agent memory index [--rebuild] [--json]                         # shipped; status, or --rebuild to force
 nemeda-agent memory sync [--dry-run]                                   # promote to central — pending (phase 3)
 nemeda-agent memory recap --period P [--scope project|central]              # pending (phase 3)
 nemeda-agent memory import-airtable [--base app…] [--dry-run]               # pending (1b-iv)
@@ -539,10 +549,17 @@ for both sides.
      the Drive `klog.md` commands), and the MCP server's `memory_search`/
      `memory_recent`/`memory_get` tools — all reading straight through the
      in-memory reference engine, no SQLite index yet.
-   - **1b-ii, pending**: the SQLite/`sqlite3`-CLI accelerated index and
-     `memory index --rebuild` (the in-memory engine used everywhere today
-     stays correct at any scale this kit is likely to see for a while, so
-     this is a performance layer, not a correctness gap).
+   - **1b-ii, done**: `scripts/lib/memory-index.mjs` — the machine-local
+     index with three engines (`node:sqlite`, the `sqlite3` CLI, the
+     in-memory reference), automatic rebuild on journal change, fallback to
+     the reference engine on any engine failure, `nemeda-agent memory
+     index [--rebuild]`, and `memory list`/`search` plus the MCP
+     `memory_*` tools answering through it. Verified identical to the
+     reference on all three engines (node:sqlite on Node 24, the CLI on
+     Node 20 and 24), SQL-hostile and non-ASCII queries included. Still
+     pending: the `memory-engine`/`memory-index` doctor rows (wiring them
+     into workspace.mjs would create an import cycle through memory.mjs;
+     `nemeda-agent memory index` reports the same facts today).
    - **1b-iii, mostly done**: the unattended-capture ledger hooks
      (`scripts/hooks/memory-ledger.mjs`, one script wired into both
      `SessionStart` and `Stop`) and the harvester core

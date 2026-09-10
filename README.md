@@ -63,7 +63,9 @@ project instructions stay in `AGENTS.md`.
   optional company-wide database layer. `SessionStart`/`Stop` hooks also log
   every session to a local ledger, and `nemeda-agent memory harvest`
   (opt-in, `MEMORY_HARVEST=true`) resumes closed ones through their own
-  host CLI to summarise sessions people forgot to log by hand.
+  host CLI to summarise sessions people forgot to log by hand. Queries
+  go through a machine-local SQLite cache (never on the drive) that
+  rebuilds itself whenever the journals change.
 - **A personal Slack bridge** (`nemeda-agent slack`): a Socket Mode runner that
   answers questions about your repositories in Slack threads. No infrastructure
   (the connection is outbound, so there is no server, URL, or tunnel), and every
