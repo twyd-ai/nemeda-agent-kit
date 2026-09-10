@@ -153,7 +153,11 @@ test("dogfood and sanitized example configurations pass runtime validation", () 
   ];
 
   for (const configuration of configurations) {
-    assert.deepEqual(validateConfig(readJson(configuration)), [], configuration);
+    // Errors only: a deprecation warning (e.g. airtable.knowledgeLog, see
+    // docs/memory-plan.md) is expected on the older examples and is not a
+    // validation failure — the same distinction setup/hooks already use.
+    const errors = validateConfig(readJson(configuration)).filter((issue) => issue.level === "error");
+    assert.deepEqual(errors, [], configuration);
   }
 });
 

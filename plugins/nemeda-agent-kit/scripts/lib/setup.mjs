@@ -34,7 +34,8 @@ const DRIVE_FOLDER_READMES = {
   docs: "# docs\n\nProject documentation, shared by the whole team.\n\nFile things in the matching subfolder (meeting notes in `meets/`, transcripts in `transcriptions/`, analysis in `analisis/`). Create a new subfolder rather than leaving files loose in this root.\n",
   config: "# config\n\nShared, non-secret configuration: environment templates, service settings, VPN profiles.\n\nSecrets never go here — they live in each person's local `.env` files.\n",
   skills: "# skills\n\nShared agent skills for this project. Every teammate's AI loads these through the workspace symlinks, so a skill improved here improves for everyone.\n",
-  commands: "# commands\n\nShared slash commands for this project, loaded by every teammate's AI through the workspace symlinks.\n"
+  commands: "# commands\n\nShared slash commands for this project, loaded by every teammate's AI through the workspace symlinks.\n",
+  memory: "# memory\n\nProject memory: one append-only JSONL journal per teammate under `journal/`, plus recap documents under `digests/`. Never edit another teammate's journal file by hand — write through `nemeda-agent memory add` instead, which always appends to your own. See docs/memory-plan.md.\n"
 };
 
 function provisionDriveFolder(target, relativePath, actions, dryRun, kind) {

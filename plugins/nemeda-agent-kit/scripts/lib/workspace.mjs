@@ -326,12 +326,58 @@ function validateMeetings(meetings, issues) {
   }
 }
 
+const MEMORY_STORE_TYPES = ["journal", "sqlite-file"];
+const MEMORY_PROMOTE_VALUES = ["reviewed", "all"];
+const ENV_VARIABLE_NAME_PATTERN = /^[A-Z][A-Z0-9_]*$/;
+
+// See docs/memory-plan.md. `memory.project` is the local journal/index
+// layer; `memory.central` is an optional connection to a database
+// provisioned entirely outside the kit (never validated for reachability
+// here — that is a doctor concern, not a config-shape one).
+function validateMemory(memory, issues) {
+  if (!isObject(memory)) {
+    issues.push({ level: "error", code: "invalid-memory", message: "memory must be an object." });
+    return;
+  }
+  validateAllowedKeys(memory, ["project", "central"], "memory", issues);
+  if (!isObject(memory.project)) {
+    issues.push({ level: "error", code: "invalid-memory", message: "memory.project must be an object." });
+  } else {
+    validateAllowedKeys(memory.project, ["store", "path", "tags"], "memory.project", issues);
+    if (memory.project.store !== undefined && !MEMORY_STORE_TYPES.includes(memory.project.store)) {
+      issues.push({ level: "error", code: "invalid-memory", message: `memory.project.store must be one of: ${MEMORY_STORE_TYPES.join(", ")}.` });
+    }
+    if (!isRelativeInsidePath(memory.project.path)) {
+      issues.push({ level: "error", code: "invalid-memory", message: "memory.project.path must be a relative path inside the workspace." });
+    }
+    if (memory.project.tags !== undefined) validateStringArray(memory.project.tags, "memory.project.tags", issues);
+  }
+  if (memory.central !== undefined) {
+    if (!isObject(memory.central)) {
+      issues.push({ level: "error", code: "invalid-memory", message: "memory.central must be an object." });
+    } else {
+      validateAllowedKeys(memory.central, ["urlVariable", "schema", "projectId", "promote"], "memory.central", issues);
+      if (typeof memory.central.urlVariable !== "string" || !ENV_VARIABLE_NAME_PATTERN.test(memory.central.urlVariable)) {
+        issues.push({ level: "error", code: "invalid-memory", message: "memory.central.urlVariable must be an environment variable name (e.g. NEMEDA_MEMORY_DB_URL), not the connection string itself." });
+      }
+      for (const field of ["schema", "projectId"]) {
+        if (memory.central[field] !== undefined && (typeof memory.central[field] !== "string" || !memory.central[field].trim())) {
+          issues.push({ level: "error", code: "invalid-memory", message: `memory.central.${field} must be a non-empty string when present.` });
+        }
+      }
+      if (memory.central.promote !== undefined && !MEMORY_PROMOTE_VALUES.includes(memory.central.promote)) {
+        issues.push({ level: "error", code: "invalid-memory", message: `memory.central.promote must be one of: ${MEMORY_PROMOTE_VALUES.join(", ")}.` });
+      }
+    }
+  }
+}
+
 export function validateConfig(config) {
   const issues = [];
   if (!isObject(config)) {
     return [{ level: "error", code: "invalid-root", message: "Configuration must be a JSON object." }];
   }
-  validateAllowedKeys(config, ["schemaVersion", "project", "repository", "workspace", "context", "tools", "policies", "drive", "airtable", "slack", "meetings"], "configuration", issues);
+  validateAllowedKeys(config, ["schemaVersion", "project", "repository", "workspace", "context", "tools", "policies", "drive", "airtable", "slack", "meetings", "memory"], "configuration", issues);
   if (config.schemaVersion !== CONFIG_SCHEMA_VERSION) {
     issues.push({
       level: "error",
@@ -386,6 +432,16 @@ export function validateConfig(config) {
   if (config.airtable !== undefined) validateAirtable(config.airtable, issues);
   if (config.slack !== undefined) validateSlack(config.slack, issues);
   if (config.meetings !== undefined) validateMeetings(config.meetings, issues);
+  if (config.memory !== undefined) validateMemory(config.memory, issues);
+  // airtable.knowledgeLog is superseded by the memory section (docs/memory-plan.md);
+  // kept working for one release so existing projects have time to migrate.
+  if (config.airtable?.knowledgeLog !== undefined) {
+    issues.push({
+      level: "warn",
+      code: "deprecated-knowledge-log",
+      message: "airtable.knowledgeLog is deprecated; migrate to the memory section (see docs/memory-plan.md)."
+    });
+  }
   if (!isObject(config.context)) {
     issues.push({ level: "error", code: "missing-context", message: "context must be an object." });
   } else {
@@ -590,6 +646,7 @@ export function workspaceDoctor(start = defaultWorkspaceDirectory()) {
     if (context.config.drive) driveDoctorChecks(context.root, context.config.drive, checks);
     if (context.config.workspace?.repositories) repositoryDoctorChecks(context.root, context.config.workspace.repositories, checks);
     if (context.config.airtable) airtableDoctorChecks(context.root, context.config.airtable, checks);
+    if (context.config.memory) memoryDoctorChecks(context.root, context.config.memory, checks);
   }
   return { root: context.root, mode: context.mode, checks };
 }
@@ -745,6 +802,64 @@ function airtableDoctorChecks(root, airtableConfig, checks) {
   }
 }
 
+// Sync-client "conflicted copy" naming, macOS Google Drive/OneDrive style
+// ("file (1).jsonl", "file-conflict-2026-09-10.jsonl") and Dropbox/rclone
+// style ("file (Author's conflicted copy 2026-09-10).jsonl") both contain a
+// parenthesized or hyphenated marker after the base name; this is a
+// heuristic, not a guarantee, matching the honesty of the rest of doctor.
+const JOURNAL_CONFLICT_PATTERN = /\(.*conflict|conflicted|\(\d+\)\.jsonl$/i;
+
+// Only the checks that are meaningful without the SQLite index or a central
+// connection (neither exists yet — see docs/memory-plan.md phase 1a vs 1b).
+// The deprecation warning for airtable.knowledgeLog needs no check here: it
+// is a validateConfig issue and already surfaces through the generic issues
+// loop above.
+function memoryDoctorChecks(root, memoryConfig, checks) {
+  const memoryRoot = path.join(root, memoryConfig.project.path);
+  let folderStat = null;
+  try {
+    folderStat = lstatSync(memoryRoot);
+  } catch {
+    folderStat = null;
+  }
+  if (!folderStat) {
+    checks.push({ status: "warn", code: "memory-folder", message: `${memoryConfig.project.path} does not exist yet; add it to drive.links and run \`nemeda-agent setup\`.` });
+  } else if (!folderStat.isSymbolicLink()) {
+    checks.push({ status: "warn", code: "memory-folder", message: `${memoryConfig.project.path} is a local folder, not shared through drive.links; project memory would stay on this machine.` });
+  } else if (!existsSync(memoryRoot)) {
+    checks.push({ status: "fail", code: "memory-folder", message: `${memoryConfig.project.path} is a broken symlink; is the shared drive syncing?` });
+  } else {
+    checks.push({ status: "pass", code: "memory-folder", message: `${memoryConfig.project.path} resolves to shared storage.` });
+
+    const journalDir = path.join(memoryRoot, "journal");
+    if (existsSync(journalDir)) {
+      const authorEmail = runGit(root, ["config", "user.email"]);
+      if (authorEmail) {
+        const authorFile = path.join(journalDir, `${authorEmail}.jsonl`);
+        if (!existsSync(authorFile)) {
+          checks.push({ status: "pass", code: "memory-journal", message: `No journal yet for ${authorEmail}; the first \`memory add\` creates it.` });
+        } else {
+          try {
+            accessSync(authorFile, constants.W_OK);
+            checks.push({ status: "pass", code: "memory-journal", message: `${authorEmail}'s journal is writable.` });
+          } catch {
+            checks.push({ status: "fail", code: "memory-journal", message: `${authorEmail}'s journal exists but is not writable.` });
+          }
+        }
+      } else {
+        checks.push({ status: "warn", code: "memory-journal", message: "git config user.email is not set; the reviewed and unattended logging flows need it to name this author's journal." });
+      }
+
+      const conflicts = readdirSync(journalDir).filter((name) => name.endsWith(".jsonl") && JOURNAL_CONFLICT_PATTERN.test(name));
+      checks.push(
+        conflicts.length === 0
+          ? { status: "pass", code: "memory-conflicts", message: "No sync-client conflict copies in journal/." }
+          : { status: "warn", code: "memory-conflicts", message: `Sync-client conflict copies found: ${conflicts.join(", ")}. Their entries are still readable (deduped by id), but merge and delete the copies by hand.` }
+      );
+    }
+  }
+}
+
 function slugify(value) {
   return value
     .toLowerCase()
@@ -880,6 +995,9 @@ export function formatContextForHook(context) {
   if (context.config.meetings) {
     const meetings = context.config.meetings;
     lines.push(`Meetings: the kit files one folder per transcribed recording under ${meetings.transcripts}/ (transcript.txt, transcript.srt, transcript.json, meta.json)${meetings.notes ? `; meeting notes go to ${meetings.notes}/` : ""}. New recordings are transcribed with \`nemeda-agent meeting process\`; never transcribe or copy them by hand.`);
+  }
+  if (context.config.memory) {
+    lines.push(`Project memory: session summaries, decisions, and findings live in ${context.config.memory.project.path}/, one journal per author. Search prior work with \`nemeda-agent memory search "<query>"\` before proposing something that may already have been decided or found; log new entries with \`nemeda-agent memory add\`.`);
   }
   if (context.config.airtable?.tasks) {
     lines.push(`Airtable tasks: base ${context.config.airtable.baseId}, table ${context.config.airtable.tasks.tableId}.`);

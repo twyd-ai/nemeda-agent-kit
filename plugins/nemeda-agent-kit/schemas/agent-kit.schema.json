@@ -334,6 +334,63 @@
           }
         }
       }
+    },
+    "memory": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["project"],
+      "description": "Project and central knowledge memory: session summaries, decisions, findings, and meeting outcomes. See docs/memory-plan.md.",
+      "properties": {
+        "project": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["path"],
+          "properties": {
+            "store": {
+              "enum": ["journal", "sqlite-file"],
+              "default": "journal",
+              "description": "journal: one append-only JSONL file per author, safe with cloud sync clients. sqlite-file: a single shared file, only safe for a one-person project."
+            },
+            "path": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Workspace-relative folder that holds the memory journals; should resolve through a drive.links entry so every teammate shares it."
+            },
+            "tags": {
+              "type": "array",
+              "items": { "type": "string", "minLength": 1 },
+              "description": "Suggested tags shown by the reviewed-logging skill; free text, not enforced."
+            }
+          }
+        },
+        "central": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["urlVariable"],
+          "description": "Optional connection to a company-wide PostgreSQL database provisioned outside the kit.",
+          "properties": {
+            "urlVariable": {
+              "type": "string",
+              "pattern": "^[A-Z][A-Z0-9_]*$",
+              "description": "Name of the .env.local variable holding the personal connection string; never the value itself."
+            },
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "default": "nemeda_memory"
+            },
+            "projectId": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Row id in the central projects table; defaults to project.id."
+            },
+            "promote": {
+              "enum": ["reviewed", "all"],
+              "default": "reviewed"
+            }
+          }
+        }
+      }
     }
   },
   "oneOf": [

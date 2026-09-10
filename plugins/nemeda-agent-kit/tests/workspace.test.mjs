@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -96,4 +97,98 @@ test("doctor identifies substantial parallel instruction files", () => {
 
   const report = workspaceDoctor(root);
   assert.equal(report.checks.some((check) => check.code === "instruction-drift"), true);
+});
+
+function configWithMemory(memory) {
+  return { ...validConfig(), memory };
+}
+
+test("validateConfig accepts a minimal memory.project and rejects unknown keys or providers", () => {
+  const minimal = configWithMemory({ project: { path: "memory" } });
+  assert.deepEqual(validateConfig(minimal), []);
+
+  const withCentral = configWithMemory({
+    project: { path: "memory", store: "journal", tags: ["architecture"] },
+    central: { urlVariable: "NEMEDA_MEMORY_DB_URL", promote: "reviewed" }
+  });
+  assert.deepEqual(validateConfig(withCentral), []);
+
+  const badStore = configWithMemory({ project: { path: "memory", store: "dropbox" } });
+  assert.equal(validateConfig(badStore).some((issue) => issue.code === "invalid-memory" && /store must be one of/.test(issue.message)), true);
+
+  const badPath = configWithMemory({ project: { path: "/etc/memory" } });
+  assert.equal(validateConfig(badPath).some((issue) => issue.code === "invalid-memory" && /path must be a relative path/.test(issue.message)), true);
+
+  const unknownKey = configWithMemory({ project: { path: "memory" }, extra: true });
+  assert.equal(validateConfig(unknownKey).some((issue) => issue.code === "unknown-field" && issue.message.includes("memory.extra")), true);
+
+  const badVariable = configWithMemory({ project: { path: "memory" }, central: { urlVariable: "not_a_var_name" } });
+  assert.equal(validateConfig(badVariable).some((issue) => issue.code === "invalid-memory" && /urlVariable must be an environment variable name/.test(issue.message)), true);
+
+  const badPromote = configWithMemory({ project: { path: "memory" }, central: { urlVariable: "NEMEDA_MEMORY_DB_URL", promote: "sometimes" } });
+  assert.equal(validateConfig(badPromote).some((issue) => issue.code === "invalid-memory" && /promote must be one of/.test(issue.message)), true);
+});
+
+test("validateConfig warns (does not fail) when airtable.knowledgeLog is still present", () => {
+  const config = { ...validConfig(), airtable: { baseId: "appXXXXXXXXXXXXXX", knowledgeLog: { tableId: "tblXXXXXXXXXXXXXX" } } };
+  const issues = validateConfig(config);
+  const deprecation = issues.find((issue) => issue.code === "deprecated-knowledge-log");
+  assert.ok(deprecation, "expected a deprecated-knowledge-log issue");
+  assert.equal(deprecation.level, "warn");
+  assert.equal(issues.some((issue) => issue.level === "error"), false);
+});
+
+test("doctor reports the memory folder's state: missing, unshared, broken link, and healthy", () => {
+  const missing = temporaryDirectory();
+  mkdirSync(path.join(missing, ".nemeda"));
+  writeFileSync(path.join(missing, ".nemeda", "agent-kit.json"), JSON.stringify(configWithMemory({ project: { path: "memory" } })));
+  assert.equal(workspaceDoctor(missing).checks.find((check) => check.code === "memory-folder").status, "warn");
+
+  const unshared = temporaryDirectory();
+  mkdirSync(path.join(unshared, ".nemeda"));
+  mkdirSync(path.join(unshared, "memory"));
+  writeFileSync(path.join(unshared, ".nemeda", "agent-kit.json"), JSON.stringify(configWithMemory({ project: { path: "memory" } })));
+  const unsharedCheck = workspaceDoctor(unshared).checks.find((check) => check.code === "memory-folder");
+  assert.equal(unsharedCheck.status, "warn");
+  assert.match(unsharedCheck.message, /stay on this machine/);
+
+  const broken = temporaryDirectory();
+  mkdirSync(path.join(broken, ".nemeda"));
+  symlinkSync(path.join(broken, "does-not-exist"), path.join(broken, "memory"));
+  writeFileSync(path.join(broken, ".nemeda", "agent-kit.json"), JSON.stringify(configWithMemory({ project: { path: "memory" } })));
+  assert.equal(workspaceDoctor(broken).checks.find((check) => check.code === "memory-folder").status, "fail");
+
+  const healthy = temporaryDirectory();
+  const drive = temporaryDirectory();
+  mkdirSync(path.join(drive, "memory"));
+  mkdirSync(path.join(healthy, ".nemeda"));
+  symlinkSync(path.join(drive, "memory"), path.join(healthy, "memory"));
+  writeFileSync(path.join(healthy, ".nemeda", "agent-kit.json"), JSON.stringify(configWithMemory({ project: { path: "memory" } })));
+  assert.equal(workspaceDoctor(healthy).checks.find((check) => check.code === "memory-folder").status, "pass");
+});
+
+test("doctor checks this author's journal is writable and flags sync-client conflict copies", () => {
+  const root = temporaryDirectory();
+  const drive = temporaryDirectory();
+  mkdirSync(path.join(drive, "memory", "journal"), { recursive: true });
+  mkdirSync(path.join(root, ".nemeda"));
+  symlinkSync(path.join(drive, "memory"), path.join(root, "memory"));
+  writeFileSync(path.join(root, ".nemeda", "agent-kit.json"), JSON.stringify(configWithMemory({ project: { path: "memory" } })));
+  execFileSync("git", ["init", "-q", root]);
+  execFileSync("git", ["config", "user.email", "test@example.com"], { cwd: root });
+
+  const beforeJournal = workspaceDoctor(root).checks.find((check) => check.code === "memory-journal");
+  assert.equal(beforeJournal.status, "pass");
+  assert.match(beforeJournal.message, /No journal yet/);
+  assert.equal(workspaceDoctor(root).checks.find((check) => check.code === "memory-conflicts").status, "pass");
+
+  writeFileSync(path.join(drive, "memory", "journal", "test@example.com.jsonl"), "");
+  const afterJournal = workspaceDoctor(root).checks.find((check) => check.code === "memory-journal");
+  assert.equal(afterJournal.status, "pass");
+  assert.match(afterJournal.message, /is writable/);
+
+  writeFileSync(path.join(drive, "memory", "journal", "test@example.com (1).jsonl"), "");
+  const conflicts = workspaceDoctor(root).checks.find((check) => check.code === "memory-conflicts");
+  assert.equal(conflicts.status, "warn");
+  assert.match(conflicts.message, /test@example.com \(1\).jsonl/);
 });
