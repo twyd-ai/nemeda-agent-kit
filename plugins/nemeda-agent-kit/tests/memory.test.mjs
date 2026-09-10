@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -13,10 +14,32 @@ import {
   latestRevisions,
   readAllJournals,
   readJournal,
+  recordEntry,
   reviseEntry,
   searchEntries,
   validateEntry
 } from "../scripts/lib/memory.mjs";
+
+function makeConfiguredWorkspace({ memory = { project: { path: "memory" } }, repository = { id: "acme", role: "backend", profiles: [] } } = {}) {
+  const root = mkdtempSync(path.join(tmpdir(), "nemeda-memory-workspace-"));
+  mkdirSync(path.join(root, ".nemeda"), { recursive: true });
+  writeFileSync(
+    path.join(root, ".nemeda", "agent-kit.json"),
+    JSON.stringify({
+      schemaVersion: 1,
+      project: { id: "acme", name: "Acme" },
+      repository,
+      context: { instructions: ["AGENTS.md"] },
+      tools: { required: [], optional: [] },
+      policies: { protectSecrets: true },
+      ...(memory ? { memory } : {})
+    })
+  );
+  writeFileSync(path.join(root, "AGENTS.md"), "# Acme\n");
+  execFileSync("git", ["init", "-q", root]);
+  execFileSync("git", ["config", "user.email", "test@example.com"], { cwd: root });
+  return root;
+}
 
 function tempMemoryRoot() {
   return mkdtempSync(path.join(tmpdir(), "nemeda-memory-"));
@@ -198,4 +221,50 @@ test("journalPath and digestsPath resolve inside the memory root", () => {
   const root = "/tmp/example-memory";
   assert.equal(journalPath(root, "a@b.com"), path.join(root, "journal", "a@b.com.jsonl"));
   assert.equal(digestsPath(root), path.join(root, "digests"));
+});
+
+test("recordEntry appends a valid entry using the workspace's own project, repository, and git author", () => {
+  const root = makeConfiguredWorkspace();
+  const result = recordEntry(root, {
+    type: "meeting",
+    title: "Standup 2026-09-10",
+    summary: "Discussed the memory rollout.",
+    source: "meeting",
+    links: { transcript: "docs/transcripts/2026-09-10-standup" }
+  });
+  assert.equal(result.path, journalPath(path.join(root, "memory"), "test@example.com"));
+  const { entries } = readJournal(result.path);
+  assert.equal(entries.length, 1);
+  const [entry] = entries;
+  assert.equal(entry.id, result.id);
+  assert.equal(entry.project, "acme");
+  assert.equal(entry.repository, "acme");
+  assert.equal(entry.type, "meeting");
+  assert.equal(entry.author, "test@example.com");
+  assert.equal(entry.status, "pending");
+  assert.deepEqual(entry.source, { kind: "meeting", transcript: "docs/transcripts/2026-09-10-standup" });
+});
+
+test("recordEntry maps type: \"session\" to an ai-interaction entry with source.kind session", () => {
+  const root = makeConfiguredWorkspace();
+  const result = recordEntry(root, { type: "session", title: "Session log", summary: "Did stuff." });
+  const { entries } = readJournal(result.path);
+  assert.equal(entries[0].type, "ai-interaction");
+  assert.deepEqual(entries[0].source, { kind: "session" });
+});
+
+test("recordEntry returns null, never throws, when memory is not configured", () => {
+  const root = makeConfiguredWorkspace({ memory: null });
+  assert.equal(recordEntry(root, { type: "meeting", title: "x", summary: "x" }), null);
+});
+
+test("recordEntry returns null on an invalid entry instead of writing a broken journal line", () => {
+  const root = makeConfiguredWorkspace();
+  assert.equal(recordEntry(root, { type: "not-a-real-type", title: "x", summary: "x" }), null);
+  assert.equal(existsSync(path.join(root, "memory", "journal")), false);
+});
+
+test("recordEntry returns null outside any configured workspace", () => {
+  const root = mkdtempSync(path.join(tmpdir(), "nemeda-memory-unconfigured-"));
+  assert.equal(recordEntry(root, { type: "meeting", title: "x", summary: "x" }), null);
 });

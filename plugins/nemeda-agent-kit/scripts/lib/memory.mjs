@@ -3,10 +3,12 @@
 // See docs/memory-plan.md for the design and the central-database contract
 // this entry shape is meant to travel unchanged into.
 //
-// Kept decoupled from workspace.mjs config parsing on purpose: every
-// function here takes an explicit memory root (a resolved directory), never
-// reads `.nemeda/agent-kit.json` itself. Wiring this into the config
-// validator, the CLI, and `setup` provisioning is a separate step.
+// The storage primitives below are kept decoupled from workspace.mjs config
+// parsing on purpose: they take an explicit memory root (a resolved
+// directory), never read `.nemeda/agent-kit.json` themselves. recordEntry,
+// at the bottom, is the one deliberate exception — a self-contained
+// integration point other features call without needing to know this
+// module's internals; see its own comment.
 //
 // The source of truth is the journals, read fresh every time by
 // readAllJournals/latestRevisions. filterEntries/searchEntries are the
@@ -14,9 +16,11 @@
 // correct, used directly when no SQLite engine is available, and the
 // reference behaviour any accelerated index must match.
 
+import { execFileSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
+import { readWorkspaceContext } from "./workspace.mjs";
 
 export const ENTRY_TYPES = ["ai-interaction", "decision", "finding", "meeting"];
 export const ENTRY_STATUSES = ["pending", "reviewed"];
@@ -237,4 +241,68 @@ export function searchEntries(entries, query, filters = {}) {
     .filter((result) => result.score > 0)
     .sort((a, b) => b.score - a.score || (a.entry.date < b.entry.date ? 1 : -1))
     .map((result) => result.entry);
+}
+
+// Every entry is attributed to `git config user.email`, the same source the
+// Airtable Knowledge Log hooks used. Empty string (never throws) when git is
+// missing, unconfigured, or `root` is not a repository.
+export function resolveAuthorEmail(root) {
+  try {
+    return execFileSync("git", ["config", "user.email"], { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+  } catch {
+    return "";
+  }
+}
+
+// A recordEntry(...) union of the entry types other kit features log
+// against; "session" has no matching ENTRY_TYPES value, so it is filed as
+// "ai-interaction" with source.kind "session" (an AI session is the most
+// common thing that produces one).
+const RECORD_ENTRY_TYPE_ALIASES = { session: "ai-interaction" };
+
+// The one integration point other kit features (the meeting pipeline today,
+// the unattended-capture harvester later) use to log a memory entry without
+// knowing anything about journals, config shape, or author resolution.
+// Reads the workspace config itself (the one deliberate exception to this
+// module's usual "explicit memory root" rule) so a caller only needs a
+// repository root.
+//
+// Never throws: returns null whenever memory is not configured, this
+// machine has no git user.email, or anything else goes wrong — the same
+// "never block the caller" contract the Airtable hooks already follow. A
+// meeting or PR pipeline calling this is always allowed to keep going
+// whether or not it returned an id.
+//
+// `source` may be a string naming the source kind ("meeting"), or an object
+// `{ kind, ...anything else worth keeping, e.g. transcript, prUrl }`;
+// `links` (e.g. `{ transcript: "docs/transcripts/2026-09-10-standup" }`) is
+// merged onto the final source object as a convenience for callers who
+// prefer to keep that separate from the kind.
+export function recordEntry(root, { type, title, summary, date, source, links, tags, author, clientSummary } = {}) {
+  try {
+    const context = readWorkspaceContext(root);
+    if (context.mode !== "configured" || !context.config?.memory) return null;
+    const memoryRoot = path.join(context.root, context.config.memory.project.path);
+    const authorEmail = author || resolveAuthorEmail(context.root);
+    if (!authorEmail) return null;
+    const sourceIsString = typeof source === "string";
+    const sourceKind = sourceIsString ? source : source?.kind || (type === "session" ? "session" : "manual");
+    const sourceExtra = !sourceIsString && source && typeof source === "object" ? source : {};
+    const entry = createEntry({
+      project: context.config.project.id,
+      repository: context.config.repository?.id,
+      type: RECORD_ENTRY_TYPE_ALIASES[type] || type,
+      title,
+      date,
+      author: authorEmail,
+      tags: tags || [],
+      summary,
+      clientSummary,
+      source: { ...sourceExtra, kind: sourceKind, ...links }
+    });
+    appendEntry(memoryRoot, entry);
+    return { id: entry.id, path: journalPath(memoryRoot, authorEmail) };
+  } catch {
+    return null;
+  }
 }
