@@ -341,7 +341,7 @@ the airtable.com URL.
 Turns finished meeting recordings into transcripts filed on the shared drive.
 Optional; omit it and `nemeda-agent meeting` refuses to run. Design and
 roadmap in [meeting-capture-plan.md](meeting-capture-plan.md); this is what
-phase 1 ships.
+phases 1 and 2 ship.
 
 ```json
 "meetings": {
@@ -367,23 +367,56 @@ phase 1 ships.
 - `inbox`, `knowledgeLog`, `recordings`: reserved for the team-roles and
   notes phases; accepted and validated, not yet acted on.
 
-Machine-local settings go in `.env.local`, never in the shared config:
+Machine-local settings go in `.env.local`, never in the shared config.
+`nemeda-agent meeting setup` writes the first two after choosing for you:
 
 ```
+NEMEDA_MEETINGS_ENGINE=apple-speech            # apple-speech | whisper-cpp; default: what doctor selects
+NEMEDA_WHISPER_MODEL=~/.nemeda/models/ggml-large-v3-turbo.bin   # whisper only; default: best ggml-*.bin in ~/.nemeda/models or ~/whisper-models
 NEMEDA_MEETINGS_WATCH=/Users/me/Movies        # default: OBS's recording folder from its active profile
-NEMEDA_MEETINGS_ENGINE=whisper-cpp             # the only engine in phase 1
 NEMEDA_WHISPER_BIN=whisper-cli                 # default: whisper-cli on PATH
-NEMEDA_WHISPER_MODEL=~/whisper-models/ggml-large-v3-turbo.bin   # default: first ggml-*.bin in ~/.nemeda/models/
-NEMEDA_MEETINGS_THREADS=8                      # default: all cores
+NEMEDA_YAP_BIN=yap                             # default: yap on PATH
+NEMEDA_MEETINGS_THREADS=8                      # whisper only; default: all cores
 ```
 
-`nemeda-agent meeting list` shows what is ready (untouched for 60 seconds),
-still being written, and already transcribed. `nemeda-agent meeting process`
-transcribes every ready recording, or one file passed explicitly
-(`--title` names it); it needs `ffmpeg` and `whisper-cli` on `PATH`.
-Every recording is processed once (`.nemeda/state/meetings.json`), existing
-transcript folders are never overwritten (a second recording with the same
-name gets a numeric suffix), and the original recording is left where it was.
+### Engines
+
+- **`whisper-cpp`** is the cross-platform base: `whisper-cli` from
+  whisper.cpp plus a ggml model, on macOS, Windows, and Linux. Needs `ffmpeg`.
+- **`apple-speech`** is selected automatically on macOS 26 with Apple Silicon
+  when the `yap` CLI is installed: the system's SpeechAnalyzer model, nothing
+  to download, no dedicated memory, two to three times faster than whisper
+  turbo, somewhat less accurate. `--engine whisper-cpp` (or the variable)
+  brings the base engine back for a critical meeting.
+
+No model is required. For whisper, `doctor` recommends a tier from the
+hardware: `large-v3-turbo` on Apple Silicon or with an NVIDIA GPU, `small`
+on a CPU-only machine with 8 GB or more, and none below 4 cores or 8 GB (that
+machine should only record). `base` exists for `setup --model base`.
+
+### Commands
+
+- `nemeda-agent meeting list`: ready (untouched for 60 seconds), still being
+  written, and already transcribed recordings, plus the selected engine.
+- `nemeda-agent meeting process [FILE] [--title …] [--engine …]`: transcribes
+  every ready recording, or one file. Every recording is processed once
+  (`.nemeda/state/meetings.json`), existing transcript folders are never
+  overwritten (a second recording with the same name gets a numeric suffix),
+  and the original recording is left where it was.
+- `nemeda-agent meeting doctor`: machine capability and estimate per hour of
+  audio, engine selection and why, ffmpeg and model, recordings folder,
+  transcripts/notes folders and whether they sit inside a Drive link, and the
+  backlog. The same checks appear in `nemeda-agent doctor` and the
+  `workspace_doctor` MCP tool when the section exists.
+- `nemeda-agent meeting setup [--obs] [--model TIER] [--yes] [--dry-run]`:
+  shows the plan (Homebrew or winget installs, model download to
+  `~/.nemeda/models/`, `.env.local` lines), asks for confirmation, then runs
+  it. Commands that need `sudo` or a manual download are printed, never run.
+  `--obs` adds OBS Studio; OBS itself is recommended, not required, because
+  any recording that lands in the watched folder is processed.
+
+At session start a hook adds one context line when recordings are waiting, so
+the agent can offer to run `meeting process`; it never transcribes by itself.
 
 ## Project memory (`memory`)
 

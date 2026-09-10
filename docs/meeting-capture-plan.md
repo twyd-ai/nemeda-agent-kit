@@ -1,6 +1,9 @@
 # Meeting capture and transcription plan
 
-Status: design, not implemented. Target release: 0.4.0.
+Status: phases 1 and 2 implemented (`nemeda-agent meeting list | process |
+doctor | setup`, whisper.cpp and apple-speech engines, SessionStart inbox
+hook); phases 3 to 5 pending. Target release: 0.4.0. The shipped
+configuration is documented in `docs/configuration.md`.
 
 Goal: replace the manual loop *record the meeting with OBS, run whisper by
 hand, copy the text into the shared drive* with one kit-owned pipeline that

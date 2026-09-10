@@ -1,5 +1,5 @@
 {
-  "description": "Load repository-owned Agent Kit context and run the Airtable automations. Every hook is a fast no-op unless .nemeda/agent-kit.json configures the matching section.",
+  "description": "Load repository-owned Agent Kit context, flag meeting recordings waiting for transcription, and run the Airtable automations. Every hook is a fast no-op unless .nemeda/agent-kit.json configures the matching section.",
   "hooks": {
     "SessionStart": [
       {
@@ -9,6 +9,12 @@
             "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/session-context.mjs\"",
             "timeout": 10,
             "statusMessage": "Loading repository context"
+          },
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/hooks/meeting-inbox.mjs\"",
+            "timeout": 10,
+            "statusMessage": "Checking for meeting recordings to transcribe"
           },
           {
             "type": "command",

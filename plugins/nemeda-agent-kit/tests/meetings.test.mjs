@@ -85,6 +85,8 @@ fs.writeFileSync(base + ".json", JSON.stringify({ result: { language: "es" }, tr
   // PATH and HOME come from the real environment so `#!/usr/bin/env node` resolves.
   return {
     ...process.env,
+    // Pin the base engine: on a macOS 26 Mac with yap installed the default would be apple-speech.
+    NEMEDA_MEETINGS_ENGINE: "whisper-cpp",
     ...environment,
     NEMEDA_FFMPEG_BIN: ffmpeg,
     NEMEDA_WHISPER_BIN: whisper,
@@ -197,7 +199,8 @@ test("detectObsRecordingFolder reads RecFilePath from the active profile", () =>
 
 test("resolveEngine only knows the shipped adapters", () => {
   assert.equal(resolveEngine().name, "whisper-cpp");
-  assert.throws(() => resolveEngine("apple-speech"), /Unknown transcription engine/);
+  assert.equal(resolveEngine("apple-speech").needsModel, false);
+  assert.throws(() => resolveEngine("parakeet"), /Unknown transcription engine/);
 });
 
 test("processRecordings transcribes ready recordings end to end with stubs and is idempotent", () => {

@@ -15,6 +15,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { DRIVE_PROVIDERS, driveProvider, planDriveLinks } from "./drive.mjs";
 import { ENV_LOCAL_NAME, loadEnvLocal } from "./env.mjs";
+import { meetingDoctorChecks } from "./meetings-doctor.mjs";
 
 export const CONFIG_RELATIVE_PATH = path.join(".nemeda", "agent-kit.json");
 export const CONFIG_SCHEMA_VERSION = 1;
@@ -647,6 +648,7 @@ export function workspaceDoctor(start = defaultWorkspaceDirectory()) {
     if (context.config.workspace?.repositories) repositoryDoctorChecks(context.root, context.config.workspace.repositories, checks);
     if (context.config.airtable) airtableDoctorChecks(context.root, context.config.airtable, checks);
     if (context.config.memory) memoryDoctorChecks(context.root, context.config.memory, checks);
+    if (context.config.meetings) checks.push(...meetingDoctorChecks(context.root, context.config.meetings, context.config.drive, process.env));
   }
   return { root: context.root, mode: context.mode, checks };
 }

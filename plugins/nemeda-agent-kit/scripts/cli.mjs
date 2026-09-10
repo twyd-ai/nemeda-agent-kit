@@ -38,6 +38,9 @@ function parseArguments(argv) {
     else if (value === "--author") options.author = rest[++index];
     else if (value === "--since") options.since = rest[++index];
     else if (value === "--pending") options.pending = true;
+    else if (value === "--model") options.model = rest[++index];
+    else if (value === "--obs") options.obs = true;
+    else if (value === "--yes" || value === "-y") options.yes = true;
     else if (command === "meeting" && options.subcommand === "process" && !options.file && !value.startsWith("-")) options.file = value;
     else if (command === "memory" && options.subcommand === "search" && !options.query && !value.startsWith("-")) options.query = value;
     else if (command === "slack" && ["ask", "join", "server"].includes(options.subcommand) && !options.question) options.question = value;
@@ -69,6 +72,8 @@ Usage:
   nemeda-agent slack run [--server NAME]      # one runner per relay, side by side
   nemeda-agent meeting process [FILE] [--title TITLE] [--engine NAME] [--dry-run] [--json]
   nemeda-agent meeting list [--json]
+  nemeda-agent meeting doctor [--engine NAME] [--json]
+  nemeda-agent meeting setup [--obs] [--model TIER] [--engine NAME] [--yes] [--dry-run] [--json]
   nemeda-agent memory add [--type TYPE] [--title TITLE] [--tags a,b] [--json]
   nemeda-agent memory list [--pending] [--type TYPE] [--author EMAIL] [--since DATE] [--json]
   nemeda-agent memory search "query" [--pending] [--type TYPE] [--json]
@@ -107,6 +112,12 @@ Commands:
                        (OBS's recording folder, or NEMEDA_MEETINGS_WATCH), or
                        one FILE; files <date>-<slug>/ under meetings.transcripts
              list      show ready, in-progress, and already transcribed recordings
+             doctor    machine capability, engine selection (apple-speech on
+                       macOS 26 + Apple Silicon, whisper.cpp elsewhere), model,
+                       ffmpeg, recordings folder, Drive folders, backlog
+             setup     install the missing tools (brew/winget, on confirmation),
+                       download the recommended whisper model, and record the
+                       choices in .env.local; --obs also installs OBS Studio
   memory   Read and write project memory (needs a \`memory\` section in
            .nemeda/agent-kit.json; see docs/memory-plan.md).
              add       append one entry; the summary is read from stdin (or,
@@ -196,6 +207,22 @@ async function runAirtable(options) {
   return 0;
 }
 
+// Yes/no question for commands that install software. Without a terminal the
+// answer is "no": scripts must pass --yes explicitly.
+async function confirm(question) {
+  if (!process.stdin.isTTY) {
+    console.log(`${question}(no terminal; pass --yes to confirm)`);
+    return false;
+  }
+  const { createInterface } = await import("node:readline/promises");
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    return /^y(es)?$/i.test((await rl.question(question)).trim());
+  } finally {
+    rl.close();
+  }
+}
+
 async function runMeeting(options) {
   const subcommand = options.subcommand || "list";
   const { listRecordings, processRecordings } = await import("./lib/meetings.mjs");
@@ -208,7 +235,7 @@ async function runMeeting(options) {
     }
     console.log(`Nemeda Agent Kit meetings at ${listing.root}`);
     console.log(`Recordings folder: ${listing.watch || "not configured (set NEMEDA_MEETINGS_WATCH in .env.local)"}`);
-    console.log(`Engine: ${listing.engine}${listing.model ? ` (model ${listing.model})` : " (no model found)"}`);
+    console.log(`Engine: ${listing.engine} (${listing.engineReason})${listing.engine === "apple-speech" ? "" : listing.model ? `, model ${listing.model}` : ", no model found: run `nemeda-agent meeting setup`"}`);
     const describe = (entry) => `${entry.path} (${(entry.size / 1024 / 1024).toFixed(0)} MB)`;
     console.log(`\nReady (${listing.ready.length}):`);
     for (const entry of listing.ready) console.log(`  ${describe(entry)}`);
@@ -226,7 +253,39 @@ async function runMeeting(options) {
     printReport(report, options, `Nemeda Agent Kit meeting process${report.dryRun ? " (dry run)" : ""} at ${report.root}`);
     return report.actions.some((entry) => entry.status === "error") ? 1 : 0;
   }
-  throw new Error(`Unknown meeting subcommand: ${subcommand}; use process or list.`);
+  if (subcommand === "doctor") {
+    const { meetingDoctorChecks } = await import("./lib/meetings-doctor.mjs");
+    const context = readWorkspaceContext(cwd);
+    if (context.mode !== "configured") throw new Error("No .nemeda/agent-kit.json found; run `nemeda-agent init` first.");
+    if (!context.config?.meetings) throw new Error("This workspace has no `meetings` section in .nemeda/agent-kit.json; add one to enable meeting capture.");
+    const checks = meetingDoctorChecks(context.root, context.config.meetings, context.config.drive, process.env, { explicitEngine: options.engine || null });
+    printReport({ checks }, options, `Nemeda Agent Kit meeting doctor at ${context.root}`);
+    return checks.some((check) => check.status === "fail") ? 1 : 0;
+  }
+  if (subcommand === "setup") {
+    const { describePlan, planMeetingSetup, runMeetingSetup } = await import("./lib/meetings-setup.mjs");
+    const context = readWorkspaceContext(cwd);
+    if (context.mode !== "configured") throw new Error("No .nemeda/agent-kit.json found; run `nemeda-agent init` first.");
+    if (!context.config?.meetings) throw new Error("This workspace has no `meetings` section in .nemeda/agent-kit.json; add one to enable meeting capture.");
+    const plan = planMeetingSetup(context.root, process.env, { obs: options.obs, model: options.model, engine: options.engine });
+    const dryRun = Boolean(options.dryRun);
+    if (!options.json) {
+      console.log(`Nemeda Agent Kit meeting setup${dryRun ? " (dry run)" : ""} at ${context.root}`);
+      for (const line of describePlan(plan)) console.log(line);
+    }
+    const willRun = plan.steps.some((step) => step.run) || Boolean(plan.download);
+    if (willRun && !dryRun && !options.yes) {
+      const confirmed = await confirm("Run the commands and downloads above now? [y/N] ");
+      if (!confirmed) {
+        console.log("Nothing changed. Re-run with --yes to skip the question, or --dry-run to only see the plan.");
+        return 1;
+      }
+    }
+    const report = runMeetingSetup(plan, { dryRun });
+    printReport(report, options, dryRun ? "Planned:" : "Done:");
+    return report.actions.some((entry) => entry.status === "error") ? 1 : 0;
+  }
+  throw new Error(`Unknown meeting subcommand: ${subcommand}; use process, list, doctor, or setup.`);
 }
 
 async function readStdin() {
