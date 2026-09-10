@@ -42,6 +42,7 @@ function parseArguments(argv) {
     else if (value === "--session") options.sessionId = rest[++index];
     else if (value === "--previous") options.previous = true;
     else if (value === "--rebuild") options.rebuild = true;
+    else if (value === "--interval") options.interval = rest[++index];
     else if (value === "--model") options.model = rest[++index];
     else if (value === "--obs") options.obs = true;
     else if (value === "--yes" || value === "-y") options.yes = true;
@@ -89,6 +90,8 @@ Usage:
   nemeda-agent memory review [ID] [--all] [--json]
   nemeda-agent memory harvest [--session ID] [--dry-run] [--json]
   nemeda-agent memory index [--rebuild] [--json]
+  nemeda-agent memory install [--interval MINUTES] [--dry-run] [--json]
+  nemeda-agent memory uninstall [--dry-run] [--json]
 
 Commands:
   init     Create missing .nemeda/agent-kit.json and AGENTS.md safely.
@@ -158,6 +161,13 @@ Commands:
                        not); --rebuild forces a rebuild. Never on the shared
                        drive — list/search rebuild it automatically when the
                        journals change.
+             install   schedule \`memory harvest\` every --interval minutes
+                       (default 30) and at login with this machine's own
+                       scheduler: a LaunchAgent on macOS, a systemd user
+                       timer on Linux, a Task Scheduler task on Windows.
+                       Needs MEMORY_HARVEST=true. Re-run it after updating
+                       the plugin so the job follows the new path.
+             uninstall remove this workspace's scheduled harvest
 `;
 }
 
@@ -436,6 +446,20 @@ async function runMemory(options) {
     return 0;
   }
 
+  if (subcommand === "install" || subcommand === "uninstall") {
+    const { flagEnabled, loadEnvLocal } = await import("./lib/env.mjs");
+    loadEnvLocal(context.root, process.env);
+    if (subcommand === "install" && !flagEnabled("MEMORY_HARVEST", process.env)) {
+      throw new Error("MEMORY_HARVEST is not enabled; set MEMORY_HARVEST=true in .env.local first (a scheduled harvest resumes sessions through the host CLI, and that costs tokens).");
+    }
+    const { installHarvestScheduler, uninstallHarvestScheduler } = await import("./lib/harvest-scheduler.mjs");
+    const report = subcommand === "install"
+      ? installHarvestScheduler(context.root, context.config, { intervalMinutes: options.interval, dryRun: Boolean(options.dryRun) })
+      : uninstallHarvestScheduler(context.root, context.config, { dryRun: Boolean(options.dryRun) });
+    printReport(report, options, `Nemeda Agent Kit memory ${subcommand}${report.dryRun ? " (dry run)" : ""} — ${report.platform}, job ${report.identity.name}`);
+    return report.actions.some((entry) => entry.status === "error") ? 1 : 0;
+  }
+
   // Review writes a revision, so it reads the journals — the source of
   // truth — directly, never the local index cache.
   const { entries: rawEntries } = memoryLib.readAllJournals(memoryRoot);
@@ -531,7 +555,7 @@ async function runMemory(options) {
     return results.some((result) => !result.ok) ? 1 : 0;
   }
 
-  throw new Error(`Unknown memory subcommand: ${subcommand}; use add, list, search, review, harvest, or index.`);
+  throw new Error(`Unknown memory subcommand: ${subcommand}; use add, list, search, review, harvest, index, install, or uninstall.`);
 }
 
 async function runSlack(options) {

@@ -8,7 +8,8 @@
 // This slice ships the ledger and the harvester core (resume one session,
 // parse its output, file the entries, mark it harvested). Not yet
 // implemented, and explicitly deferred (docs/memory-plan.md phase 1b-iii):
-// `memory install`'s local scheduler and the doctor rows. Also deferred:
+// the doctor rows (the scheduled trigger lives in harvest-scheduler.mjs).
+// Also deferred:
 // the "read the raw transcript" fallback for a session that can no longer
 // be resumed — today a failed resume is recorded as a harvest error, never
 // fabricated. The opportunistic trigger (a detached harvest spawned from
