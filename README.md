@@ -50,6 +50,13 @@ project instructions stay in `AGENTS.md`.
   Every hook is a fast no-op in repositories without an `airtable` section,
   never blocks the tool that triggered it, and requires `gh` to be installed
   and authenticated — `nemeda-agent doctor` checks both explicitly.
+- **Project memory** (`nemeda-agent memory`), replacing the Airtable
+  Knowledge Log: session summaries, decisions, findings, and meeting
+  outcomes as append-only, per-author journals on the shared drive — safe
+  with Google Drive and OneDrive sync clients, unlike a single shared
+  database file. `memory add`/`list`/`search` work with no Airtable
+  dependency at all; see [memory-plan.md](docs/memory-plan.md) for the
+  design and the optional company-wide database layer.
 - **A personal Slack bridge** (`nemeda-agent slack`): a Socket Mode runner that
   answers questions about your repositories in Slack threads. No infrastructure
   (the connection is outbound, so there is no server, URL, or tunnel), and every

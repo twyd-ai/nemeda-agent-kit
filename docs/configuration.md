@@ -385,6 +385,50 @@ Every recording is processed once (`.nemeda/state/meetings.json`), existing
 transcript folders are never overwritten (a second recording with the same
 name gets a numeric suffix), and the original recording is left where it was.
 
+## Project memory (`memory`)
+
+Session summaries, decisions, findings, and meeting outcomes, replacing the
+Airtable Knowledge Log. Optional; omit it and `nemeda-agent memory` refuses
+to run. Full design, storage rationale, and the central-database layer in
+[memory-plan.md](memory-plan.md); this is what the project layer ships.
+
+```json
+"memory": {
+  "project": {
+    "path": ".nemeda/memory",
+    "tags": ["architecture", "api", "deployment"]
+  }
+}
+```
+
+- `project.path` (required): workspace-relative folder that holds the
+  journals. Put it inside a `drive.links` entry (e.g.
+  `".nemeda/memory": "memory"`) so every teammate shares it; `doctor` warns
+  when it resolves to a plain local folder instead.
+- `project.store`: `journal` (default) — one append-only JSONL file per
+  author under `<path>/journal/<email>.jsonl`, safe with Google Drive and
+  OneDrive sync clients because each file has exactly one writer. A cloud
+  sync client does not honour SQLite's cross-machine locking, so a single
+  shared `.sqlite` file is only offered as an explicit `sqlite-file` opt-in
+  for a one-person project.
+- `project.tags`: suggested tags shown by the reviewed-logging flow; free
+  text, never enforced.
+- `central` (optional): connects to a company-wide PostgreSQL database
+  provisioned entirely outside the kit — see memory-plan.md's contract. Not
+  implemented yet in the CLI; the config shape is validated ahead of that
+  work landing.
+
+`nemeda-agent memory add` appends one entry (`--type`, `--title`, `--tags`,
+the prose summary on stdin, or the whole entry as JSON with `--json`),
+`memory list` and `memory search "query"` read every author's journal.
+Entries are attributed to `git config user.email`; `nemeda-agent doctor`
+checks the folder resolves through Drive, this author's journal is
+writable, and flags sync-client conflict copies in `journal/`.
+
+`airtable.knowledgeLog` still works but is deprecated in favor of this
+section (`nemeda-agent doctor` reports it); it will be removed once the
+central layer ships.
+
 ## Rules
 
 - Paths are relative to the directory containing `.nemeda/`.

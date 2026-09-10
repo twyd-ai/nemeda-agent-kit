@@ -288,7 +288,8 @@ Machine-local (`.env.local`): `NEMEDA_MEMORY_DB_URL` (personal),
    `pending` entry. Opt-in via `MEMORY_HARVEST=true`.
 3. **Meeting entries** — the meeting pipeline (`meeting-capture-plan.md`,
    step 6) appends a `meeting` entry with the notes summary and a `source`
-   pointing at the transcript folder.
+   pointing at the transcript folder, through `recordEntry` (see "Cross-
+   feature integration" below) rather than the journal primitives directly.
 4. **Review inbox** — `nemeda-agent memory review` lists `pending` entries
    for the current author (or `--all`), opens each for completion through
    the local agent (same backend invocation as the Slack bridge and the
@@ -414,6 +415,41 @@ installed scheduler, and whether each host CLI is on `PATH`.
 - Transcripts never leave the machine; only the resulting summary reaches the
   project journal, exactly as with the manual flow today.
 
+## Cross-feature integration
+
+Other kit features that want to log a memory entry — the meeting pipeline
+today, the unattended-capture harvester above later — do not need to know
+anything about journals, config shape, or author resolution. They call one
+function exported by `scripts/lib/memory.mjs`:
+
+```js
+recordEntry(root, { type, title, summary, date, author, tags, source, links, clientSummary }) -> { id, path } | null
+```
+
+- `root`: any directory inside the configured repository (same argument
+  shape as `readWorkspaceContext`).
+- `type`: one of `ENTRY_TYPES` (`ai-interaction`, `decision`, `finding`,
+  `meeting`), or the string `"session"` as a convenience alias — filed as
+  `ai-interaction` with `source.kind` defaulting to `"session"`, since an AI
+  session is what usually produces that alias.
+- `author`: optional override; defaults to `git config user.email` in
+  `root`.
+- `source`: a string naming the source kind (`"meeting"`), or an object
+  `{ kind, ...anything worth keeping }` (e.g. `{ kind: "meeting", transcript:
+  "docs/transcripts/2026-09-10-standup" }`).
+- `links`: merged onto the final `source` object — a convenience for a
+  caller that would rather keep "what this points at" separate from "what
+  kind of source this is" (e.g. `links: { transcript: "..." }`).
+
+Synchronous, and **never throws**: returns `null` whenever `memory` is not
+configured for the repository, there is no resolvable author, or the
+resulting entry fails validation — the same "never block the caller"
+contract the Airtable hooks already follow. A meeting or PR pipeline calling
+this can always keep going whether or not it returned an id.
+
+If this name or signature changes, it is a breaking change for every other
+feature calling it — say so explicitly rather than changing it quietly.
+
 ## CLI surface (`nemeda-agent memory`)
 
 ```
@@ -474,11 +510,20 @@ for both sides.
 
 ## Phases
 
-1. **Project layer, local only** (0.4.0): entry shape, journals, index with
-   the three engines, `memory add/list/search/index/review`, validator and
-   schema, `setup` provisioning of `memory/`, Stop hook, `memory-log` skill,
-   MCP read tools, `import-airtable`, docs. Airtable Knowledge Log becomes
-   deprecated but still works.
+1. **Project layer, local only** (0.4.0):
+   - **1a, done**: entry shape and journals (`scripts/lib/memory.mjs`),
+     `memory add/list/search` reading and writing straight through the
+     in-memory reference engine (no SQLite acceleration yet), the `memory`
+     config section (validator + schema), `setup` provisioning of the
+     `memory` folder README, doctor checks (`memory-folder`,
+     `memory-journal`, `memory-conflicts`), the `airtable.knowledgeLog`
+     deprecation warning, `recordEntry` for other features to call, and
+     docs.
+   - **1b, pending**: the SQLite/`sqlite3`-CLI/in-memory-fallback index and
+     `memory index`, `memory review`, the `memory-log` skill (portable
+     replacement for the Drive `klog.md` commands), the unattended-capture
+     ledger hooks and harvester ("Unattended capture" above), the
+     `workspace_context` MCP read tools, and `import-airtable`.
 2. **Meeting integration** (with `meeting-capture-plan.md` phase 3): the
    pipeline writes `meeting` entries; `meeting-summary.md` retired.
 3. **Central connection** (0.5.0): `psql` adapter, `memory sync`, central
