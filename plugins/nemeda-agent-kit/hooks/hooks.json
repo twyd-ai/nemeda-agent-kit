@@ -1,5 +1,5 @@
 {
-  "description": "Load repository-owned Agent Kit context, flag meeting recordings waiting for transcription, and run the Airtable automations. Every hook is a fast no-op unless .nemeda/agent-kit.json configures the matching section.",
+  "description": "Load repository-owned Agent Kit context, flag meeting recordings waiting for transcription, record this session for the memory harvester, and run the Airtable automations. Every hook is a fast no-op unless .nemeda/agent-kit.json configures the matching section.",
   "hooks": {
     "SessionStart": [
       {
@@ -21,6 +21,12 @@
             "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/hooks/pr-airtable-reconcile.mjs\"",
             "timeout": 30,
             "statusMessage": "Syncing open/merged PR status with Airtable"
+          },
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/hooks/memory-ledger.mjs\"",
+            "timeout": 10,
+            "statusMessage": "Recording this session for the memory harvester"
           }
         ]
       }
@@ -44,6 +50,12 @@
             "type": "command",
             "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/hooks/session-log.mjs\"",
             "timeout": 15
+          },
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/hooks/memory-ledger.mjs\"",
+            "timeout": 10,
+            "statusMessage": "Recording this session for the memory harvester"
           }
         ]
       }
