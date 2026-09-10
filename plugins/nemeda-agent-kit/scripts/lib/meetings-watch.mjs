@@ -217,6 +217,9 @@ export function meetingServiceStatus(projectId, environment = process.env, platf
   const paths = servicePaths(projectId, environment, platform);
   if (!paths.file) return { ...paths, installed: null, loaded: null };
   const installed = existsSync(paths.file);
+  // loaded: true / false when the service manager answered, null when it
+  // cannot be asked (launchctl or systemctl missing on this machine, e.g. a
+  // CI runner or a Linux without a user systemd), so doctor does not warn.
   let loaded = null;
   if (installed) {
     try {
@@ -226,8 +229,8 @@ export function meetingServiceStatus(projectId, environment = process.env, platf
       } else if (platform === "linux") {
         loaded = execFileSync("systemctl", ["--user", "is-active", paths.label], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim() === "active";
       }
-    } catch {
-      loaded = false;
+    } catch (error) {
+      loaded = error?.code === "ENOENT" ? null : false;
     }
   }
   return { ...paths, installed, loaded };

@@ -6,7 +6,7 @@ import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { listTranscripts } from "../scripts/lib/meetings-core.mjs";
+import { executableOnPath, listTranscripts } from "../scripts/lib/meetings-core.mjs";
 import { meetingDoctorChecks } from "../scripts/lib/meetings-doctor.mjs";
 import { installMeetingService, meetingServiceStatus, runMeetingWatch, serviceLabel, servicePaths, uninstallMeetingService, watchTick } from "../scripts/lib/meetings-watch.mjs";
 
@@ -187,9 +187,12 @@ test("doctor reports the watch service state", () => {
   assert.match(byCode(meetingDoctorChecks(root, config().meetings, undefined, env, { probe, projectId: "acme" }))[0].message, /No watch service installed/);
   assert.equal(byCode(meetingDoctorChecks(root, config().meetings, undefined, env, { probe })).length, 0, "no project id, no service check");
   installMeetingService(root, { environment: env, platform: "darwin" });
-  // Installed but never bootstrapped: launchctl print fails, so "not loaded".
+  // Installed but never bootstrapped: on a Mac launchctl answers "not loaded"
+  // (warn); where launchctl does not exist the state is unknown (pass).
+  const canAskLaunchd = executableOnPath("launchctl", process.env);
   const check = byCode(meetingDoctorChecks(root, config().meetings, undefined, env, { probe, projectId: "acme" }))[0];
-  assert.equal(check.status, process.platform === "darwin" ? "warn" : "pass");
+  assert.equal(check.status, canAskLaunchd ? "warn" : "pass");
+  assert.equal(meetingServiceStatus("acme", env, "darwin").loaded, canAskLaunchd ? false : null);
 });
 
 test("listTranscripts and the workspace_meetings MCP tool expose what was transcribed", async () => {
