@@ -76,7 +76,7 @@ needs:
 
 | Tier | What | Who needs it | How it gets there |
 |---|---|---|---|
-| Required for transcribing | `ffmpeg`, one whisper engine, one model | machines with role `transcriber` or `full` | `meeting setup` installs on confirmation (`brew` on macOS, `winget` on Windows, `apt` on Linux) and downloads the model `doctor` recommended |
+| Required for transcribing | `ffmpeg` and one transcription engine: `apple-speech` (via `yap`, no model to download) on macOS 26 with Apple Silicon, `whisper-cpp` plus one model everywhere else | machines with role `transcriber` or `full` | `meeting setup` installs on confirmation (`brew` on macOS, `winget` on Windows, `apt` on Linux) and, for whisper engines, downloads the model `doctor` recommended |
 | Recommended for recording | OBS Studio | machines with role `recorder` or `full` that do not use a platform's native recording | `meeting setup --obs` installs it on confirmation; scenes, audio sources, and the recording folder are configured by hand following `docs/meeting-capture.md` |
 | Outside the kit | virtual audio device for system audio (BlackHole on macOS), Zoom / Teams / Meet accounts and their native recording | recorders | documented, never installed |
 
@@ -130,16 +130,17 @@ no-op, exactly like `airtable` and `slack`.
 ```
 NEMEDA_MEETINGS_ROLE=full                   # recorder | transcriber | full (default: full)
 NEMEDA_MEETINGS_WATCH=/Users/me/Movies      # default: detected from OBS
-NEMEDA_WHISPER_BIN=whisper-cli              # default: first engine found
-NEMEDA_WHISPER_MODEL=~/.nemeda/models/ggml-small.bin   # default: the model `doctor` recommended
+NEMEDA_MEETINGS_ENGINE=apple-speech         # apple-speech | whisper-cpp | whisper | mlx-whisper (default: what `doctor` selected)
+NEMEDA_WHISPER_BIN=whisper-cli              # whisper engines only; default: first binary found
+NEMEDA_WHISPER_MODEL=~/.nemeda/models/ggml-small.bin   # whisper engines only; default: the model `doctor` recommended
 NEMEDA_MEETINGS_THREADS=8                   # default: os.cpus().length
 ```
 
 | Role | Does | Needs |
 |---|---|---|
 | `recorder` | moves finished recordings from the local watch folder to the shared `inbox` | nothing beyond the drive link |
-| `transcriber` | watches the shared `inbox`, transcribes, files, writes notes, logs | ffmpeg, engine, model |
-| `full` | watches the local folder and does everything on the same machine | ffmpeg, engine, model |
+| `transcriber` | watches the shared `inbox`, transcribes, files, writes notes, logs | ffmpeg, an engine (plus a model for whisper engines) |
+| `full` | watches the local folder and does everything on the same machine | ffmpeg, an engine (plus a model for whisper engines) |
 
 One `transcriber` per team is enough; usually the person with the most capable
 machine. Two transcribers are allowed: the processed-state file lives next to
@@ -152,12 +153,39 @@ OBS detection reads `RecFilePath` from the active profile:
 `%APPDATA%\obs-studio\...` (Windows), `~/.config/obs-studio/...` (Linux). When
 OBS is not installed the watch folder must be set explicitly; `doctor` says so.
 
-### 3. Model tiers and the minimum machine
+### 3. Engine selection, model tiers, and the minimum machine
 
-No model is required by the kit. `meeting doctor` reads CPU count, free
-memory, and whether Metal (Apple Silicon) or a CUDA/Vulkan build is
-available, then recommends one tier. `large-v3-turbo` is the recommendation
-for capable machines, not a requirement.
+Two engine families, one rule:
+
+- **`whisper-cpp` is the cross-platform base.** It is the only engine that
+  behaves the same on macOS, Windows, and Linux, it is what the team already
+  runs, and it has the best accuracy in published comparisons
+  (`large-v3-turbo`). Every other adapter is an optimisation on top of it,
+  never a replacement for it.
+- **`apple-speech` is the default on macOS 26 with Apple Silicon.** It wraps
+  the system's `SpeechAnalyzer` / `SpeechTranscriber` through the `yap` CLI
+  (`brew install finnvoor/tap/yap`): the model is downloaded and managed by
+  the OS, nothing to fetch or store, no dedicated RAM, and two to three times
+  faster than whisper turbo on the same machine. Spanish is supported. It is
+  somewhat less accurate than whisper turbo, so a per-run
+  `--engine whisper-cpp` (or `NEMEDA_MEETINGS_ENGINE`) keeps the base engine
+  one flag away for critical or jargon-heavy meetings.
+
+`meeting doctor` selects the engine in this order and records why:
+
+1. `apple-speech` when the OS is macOS 26 or later on Apple Silicon and
+   `yap` is installed or installable;
+2. otherwise `whisper-cpp`, with a model tier from the hardware below;
+3. `whisper` and `mlx-whisper` only when the operator names them.
+
+With `apple-speech` there is no model tier and no memory floor: any Apple
+Silicon Mac on macOS 26 qualifies as a `transcriber`. The rest of this
+section applies to the whisper engines.
+
+No model is required by the kit. For whisper engines, `meeting doctor` reads
+CPU count, free memory, and whether Metal (Apple Silicon) or a CUDA/Vulkan
+build is available, then recommends one tier. `large-v3-turbo` is the
+recommendation for capable machines, not a requirement.
 
 | Model (whisper.cpp ggml) | Download | RAM in use | Quality | Recommended when |
 |---|---|---|---|---|
@@ -169,7 +197,8 @@ Floor: fewer than 4 logical cores or less than 4 GB of free memory. Below it
 `doctor` recommends no model and says the machine should run as `recorder`.
 Above it, the recommendation is written to `.env.local` as
 `NEMEDA_WHISPER_MODEL` by `meeting setup` after download, never guessed at
-run time. Speed on CPU is roughly 1x to 3x real time with `small` and slower
+run time; the selected engine is written as `NEMEDA_MEETINGS_ENGINE` the same
+way. Speed on CPU is roughly 1x to 3x real time with `small` and slower
 than real time with `large-v3-turbo`; on Apple Silicon `large-v3-turbo` runs
 several times faster than real time. `doctor` prints the estimate for a
 one-hour meeting so the operator can decide.
@@ -191,11 +220,16 @@ one is testable with stubs:
    `inbox`, keep a copy locally when `recordings.keep` is `local`. Stop here.
 3. **Extract audio**: `ffmpeg -i <in> -vn -ac 1 -ar 16000 -c:a pcm_s16le
    <tmp>.wav` into the OS temp directory (whisper.cpp needs 16 kHz mono PCM).
+   Skipped for `apple-speech`, which decodes the original file itself through
+   AVFoundation.
 4. **Transcribe**: engine adapter table, same shape as the drive providers:
-   - `whisper-cpp` (default; `whisper-cli -m MODEL -f WAV -l LANG -t N -otxt
-     -osrt -oj -of BASE`);
-   - `whisper` (openai-whisper CLI);
-   - `mlx-whisper` (Apple Silicon, faster).
+   - `whisper-cpp` (base engine on every platform; `whisper-cli -m MODEL -f WAV
+     -l LANG -t N -otxt -osrt -oj -of BASE`);
+   - `apple-speech` (default on macOS 26 + Apple Silicon; `yap transcribe FILE
+     --locale LANG --srt` plus a text pass, exact flags to be pinned against the
+     installed `yap` version at implementation time);
+   - `whisper` (openai-whisper CLI, opt-in);
+   - `mlx-whisper` (Apple Silicon, opt-in).
    Each adapter exposes `available()`, `command(input, output, options)` and
    `parse(outputBase)` returning `{ text, segments, language, durationSeconds }`.
 5. **File**: create `<transcripts>/<date>-<slug>/` with `transcript.txt`,
@@ -262,10 +296,10 @@ when the section exists):
 | Code | Check |
 |---|---|
 | `meetings-role` | role resolved; `recorder` skips the tool checks below |
-| `meetings-capability` | cores, free memory, GPU/Metal; recommended model tier or "run as recorder" |
+| `meetings-capability` | OS version and architecture first (native engine eligible?), then cores, free memory, GPU/Metal; recommended engine and, for whisper, model tier or "run as recorder" |
 | `meetings-ffmpeg` | `ffmpeg` on PATH, with the install command when missing |
-| `meetings-engine` | at least one engine adapter available; which one is selected |
-| `meetings-model` | model file exists, matches or exceeds the recommended tier, is not the tiny test model |
+| `meetings-engine` | selected engine and why (`apple-speech` preferred where eligible, `whisper-cpp` base elsewhere), with the install command when missing |
+| `meetings-model` | whisper engines only: model file exists, matches or exceeds the recommended tier, is not the tiny test model |
 | `meetings-watch` | watch folder resolved (OBS profile, env, or inbox) and readable |
 | `meetings-folders` | inbox/transcripts/notes exist and resolve through a Drive link |
 | `meetings-backlog` | number of ready but unprocessed recordings, and the estimated time to clear it |
@@ -280,13 +314,16 @@ when the section exists):
   claim/unclaim with two fake hosts;
 - roles: `recorder` hands off and stops, `transcriber` ignores the local
   folder, `full` does both;
-- capability: tier recommendation from injected `{ cpus, freeMemory, gpu }`
-  values, floor behaviour;
+- capability: engine selection from injected `{ platform, osVersion, arch,
+  yapInstalled }` and tier recommendation from `{ cpus, freeMemory, gpu }`,
+  floor behaviour, `NEMEDA_MEETINGS_ENGINE` override;
 - naming: date extraction from OBS file names, slug sanitisation against the
   OneDrive character set, collision handling;
-- engine adapters: `NEMEDA_WHISPER_BIN` pointing at a stub script in the temp
-  dir that writes canned `.txt/.srt/.json` outputs, `NEMEDA_FFMPEG_BIN` stub
-  likewise, so `process` runs end to end in milliseconds;
+- engine adapters: `NEMEDA_WHISPER_BIN` and `NEMEDA_YAP_BIN` pointing at stub
+  scripts in the temp dir that write canned `.txt/.srt/.json` outputs,
+  `NEMEDA_FFMPEG_BIN` stub likewise, so `process` runs end to end in
+  milliseconds with either engine; the `apple-speech` path must skip the
+  ffmpeg step;
 - setup: prints the right package-manager command per platform, runs nothing
   in `--dry-run`;
 - filing: create-if-absent, `meta.json` content, `--dry-run` writes nothing;
@@ -300,9 +337,11 @@ when the section exists):
 1. **Core**: `meetings.mjs` (discover, extract, transcribe via `whisper-cpp`,
    file), `meeting process`, `meeting list`, validator, schema, tests. Single
    machine, role `full`. Usable by hand from day one.
-2. **Diagnostics and installation**: capability check and model tiers,
-   `meeting doctor`, `meeting setup`, OBS folder detection, integration into
-   `nemeda-agent doctor` and `workspace_doctor`, SessionStart inbox hook.
+2. **Diagnostics, installation, and the native engine**: capability check,
+   engine selection, the `apple-speech` adapter, model tiers, `meeting doctor`,
+   `meeting setup` (including `yap` on eligible Macs), OBS folder detection,
+   integration into `nemeda-agent doctor` and `workspace_doctor`, SessionStart
+   inbox hook.
 3. **Team roles**: shared `inbox`, `recorder` and `transcriber` roles, shared
    processed state and claims, transcriber heartbeat.
 4. **Notes and log**: `meeting-notes` skill, local-backend notes generation,
@@ -325,7 +364,14 @@ independently shippable.
   1 takes `--title`; a later phase can read the calendar (macOS Calendar via
   `osascript`, or the existing calendar MCP) to propose title and attendees
   for the recording's time window.
-- **Model download**: up to 1.6 GB from Hugging Face. `meeting setup` prints
+- **Native engine accuracy and stability**: `apple-speech` is faster and
+  lighter but measured less accurate than whisper `large-v3-turbo` in
+  published tests, and `yap` is a third-party CLI over a first-generation API.
+  Keep `whisper-cpp` installed next to it on transcribers, expose the per-run
+  override, and pin the `yap` flags in the adapter with a doctor check on its
+  version. The first `apple-speech` run on a machine triggers the OS model
+  download, which needs network once.
+- **Model download** (whisper engines): up to 1.6 GB from Hugging Face. `meeting setup` prints
   the `curl` command and downloads only on explicit confirmation; never
   silently. Models go to `~/.nemeda/models/` so several workspaces share them.
 - **Inbox on a synced drive**: a 2 GB `mkv` takes time to upload from the
