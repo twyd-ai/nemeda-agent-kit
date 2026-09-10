@@ -239,7 +239,7 @@ test("meetingInboxContext flags waiting recordings and stays silent otherwise", 
   writeRecording(watch, "2026-09-10 09-00-00.mkv");
   writeRecording(watch, "2026-09-10 11-00-00.mkv", 3);
   const line = meetingInboxContext(root, baseConfig().meetings, { NEMEDA_MEETINGS_WATCH: watch });
-  assert.match(line, /Meeting recordings waiting: 1 in .*2026-09-10 09-00-00\.mkv/);
+  assert.match(line, /Meeting recordings waiting: 1 recording\(s\) in .* waiting to be transcribed \(2026-09-10 09-00-00\.mkv\)/);
   assert.match(line, /nemeda-agent meeting process/);
   assert.equal(meetingInboxContext(root, undefined, { NEMEDA_MEETINGS_WATCH: watch }), "");
   assert.equal(meetingInboxContext(root, baseConfig().meetings, { HOME: temporaryDirectory() }), "");

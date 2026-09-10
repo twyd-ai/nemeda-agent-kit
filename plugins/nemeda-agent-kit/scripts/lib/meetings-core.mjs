@@ -5,7 +5,7 @@
 // imports this module, and this module imports nothing of theirs, so the
 // dependency graph stays a tree.
 
-import { accessSync, constants, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { accessSync, constants, copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
@@ -465,9 +465,12 @@ function twinKey(filePath) {
 export function discoverRecordings(watch, state, { now = Date.now(), stableSeconds = STABLE_SECONDS } = {}) {
   const result = { ready: [], pending: [], processed: [], twins: [] };
   if (!watch || !existsSync(watch)) return result;
-  const processedKeys = new Set(state.processed.map(recordKey));
+  // Shared inbox state stores names relative to the folder, because every
+  // machine mounts the drive at a different absolute path.
+  const processed = state.processed.map((entry) => (path.isAbsolute(entry.path) ? entry : { ...entry, path: path.join(watch, entry.path) }));
+  const processedKeys = new Set(processed.map(recordKey));
   const processedPaths = new Map();
-  for (const entry of state.processed) {
+  for (const entry of processed) {
     if (!processedPaths.has(twinKey(entry.path))) processedPaths.set(twinKey(entry.path), new Set());
     processedPaths.get(twinKey(entry.path)).add(entry.path);
   }
@@ -498,4 +501,124 @@ export function discoverRecordings(watch, state, { now = Date.now(), stableSecon
     else result.ready.push(entry);
   }
   return result;
+}
+
+// ---------------------------------------------------------------------------
+// Team roles (docs/meeting-capture-plan.md §2). `recorder` hands finished
+// recordings to the shared inbox; `transcriber` drains the inbox; `full`
+// transcribes its own folder and the inbox. State for the inbox lives next
+// to it so several machines agree on what is done and what is claimed.
+// ---------------------------------------------------------------------------
+
+export const ROLES = ["recorder", "transcriber", "full"];
+export const DEFAULT_ROLE = "full";
+export const SHARED_STATE_FILE = ".processed.json";
+export const HEARTBEAT_FILE = ".transcribers.json";
+export const CLAIM_MARKER = ".claimed-";
+// A transcriber that has not reported in this long is treated as gone.
+export const HEARTBEAT_STALE_HOURS = 48;
+
+export function resolveRole(environment = process.env) {
+  const value = String(environment.NEMEDA_MEETINGS_ROLE || DEFAULT_ROLE).trim().toLowerCase();
+  if (!ROLES.includes(value)) throw new Error(`NEMEDA_MEETINGS_ROLE must be one of ${ROLES.join(", ")}; got "${value}".`);
+  return value;
+}
+
+function readJsonSafe(filePath, fallback) {
+  if (!existsSync(filePath)) return fallback;
+  try {
+    return JSON.parse(readFileSync(filePath, "utf8"));
+  } catch {
+    return fallback;
+  }
+}
+
+export function sharedStatePath(inbox) {
+  return path.join(inbox, SHARED_STATE_FILE);
+}
+
+export function readSharedState(inbox) {
+  const parsed = readJsonSafe(sharedStatePath(inbox), null);
+  return { processed: Array.isArray(parsed?.processed) ? parsed.processed : [] };
+}
+
+export function writeSharedState(inbox, state) {
+  writeFileSync(sharedStatePath(inbox), `${JSON.stringify(state, null, 2)}\n`);
+}
+
+// Claims: `x.mkv` becomes `x.mkv.claimed-<host>` while one transcriber works
+// on it. The rename is atomic on every filesystem the kit targets, the file
+// stops matching RECORDING_EXTENSIONS so other transcribers skip it, and the
+// original name (with its mtime and size) comes back when the work is done.
+function safeHost(host) {
+  return String(host || "unknown").replace(/[^A-Za-z0-9._-]+/g, "-");
+}
+
+export function claimPath(filePath, host) {
+  return `${filePath}${CLAIM_MARKER}${safeHost(host)}`;
+}
+
+export function claimRecording(filePath, host) {
+  const target = claimPath(filePath, host);
+  renameSync(filePath, target);
+  return target;
+}
+
+export function releaseClaim(claimedPath) {
+  const original = claimedPath.slice(0, claimedPath.lastIndexOf(CLAIM_MARKER));
+  renameSync(claimedPath, original);
+  return original;
+}
+
+export function listClaims(inbox) {
+  if (!inbox || !existsSync(inbox)) return [];
+  return readdirSync(inbox, { withFileTypes: true })
+    .filter((entry) => entry.isFile() && entry.name.includes(CLAIM_MARKER))
+    .map((entry) => {
+      const claimed = path.join(inbox, entry.name);
+      const marker = entry.name.lastIndexOf(CLAIM_MARKER);
+      return { path: claimed, original: path.join(inbox, entry.name.slice(0, marker)), host: entry.name.slice(marker + CLAIM_MARKER.length) };
+    });
+}
+
+// A claim by this very host can only be left over from a run that died;
+// releasing it makes the recording visible again.
+export function reclaimStale(inbox, host) {
+  const mine = listClaims(inbox).filter((claim) => claim.host === safeHost(host));
+  for (const claim of mine) releaseClaim(claim.path);
+  return mine.map((claim) => claim.original);
+}
+
+export function heartbeatPath(inbox) {
+  return path.join(inbox, HEARTBEAT_FILE);
+}
+
+export function readHeartbeats(inbox) {
+  const parsed = readJsonSafe(heartbeatPath(inbox), {});
+  return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+}
+
+export function writeHeartbeat(inbox, host, details = {}, now = new Date()) {
+  const beats = readHeartbeats(inbox);
+  beats[safeHost(host)] = { ...details, lastSeen: now.toISOString() };
+  writeFileSync(heartbeatPath(inbox), `${JSON.stringify(beats, null, 2)}\n`);
+  return beats;
+}
+
+export function activeTranscribers(inbox, now = Date.now(), staleHours = HEARTBEAT_STALE_HOURS) {
+  return Object.entries(readHeartbeats(inbox))
+    .filter(([, beat]) => now - Date.parse(beat?.lastSeen || 0) < staleHours * 3_600_000)
+    .map(([host, beat]) => ({ host, ...beat }));
+}
+
+// Hand-off: copy into the inbox under a temporary name, then rename, so a
+// transcriber never sees a half-written file. The original stays where the
+// recorder put it; `recordings.keep` (later phase) decides its fate.
+export function handOffRecording(recording, inbox) {
+  const target = path.join(inbox, path.basename(recording.path));
+  if (existsSync(target)) return { target, status: "kept" };
+  const part = `${target}.part`;
+  copyFileSync(recording.path, part);
+  renameSync(part, target);
+  return { target, status: "created" };
 }

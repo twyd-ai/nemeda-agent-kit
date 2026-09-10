@@ -4,8 +4,10 @@
 // the engine needs it, transcribe, and file the result under the project's
 // `meetings.transcripts` folder. Same contract as `setup`: create-if-absent,
 // every step reported as an action, nothing overwritten, nothing deleted.
-// Machine-level pieces (engines, models, OBS, discovery) live in
-// meetings-core.mjs so the doctor can use them without importing this file.
+// With `meetings.inbox` and NEMEDA_MEETINGS_ROLE the work splits across
+// machines: recorders hand finished recordings to the inbox, transcribers
+// drain it. Machine-level pieces (engines, models, OBS, discovery, claims)
+// live in meetings-core.mjs so the doctor can use them without this file.
 
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -14,16 +16,25 @@ import os from "node:os";
 import path from "node:path";
 import { loadEnvLocal } from "./env.mjs";
 import {
+  claimRecording,
   discoverRecordings,
   expandHome,
   findWhisperModel,
+  handOffRecording,
+  listClaims,
   probeHost,
+  readSharedState,
   readState,
+  reclaimStale,
   recordKey,
   recordingTimestamp,
+  releaseClaim,
+  resolveRole,
   resolveWatchFolder,
   selectEngine,
   transcriptName,
+  writeHeartbeat,
+  writeSharedState,
   writeState
 } from "./meetings-core.mjs";
 import { readWorkspaceContext, validateConfig } from "./workspace.mjs";
@@ -52,6 +63,11 @@ export function resolveMeetings(start, options = {}) {
     throw new Error("This workspace has no `meetings` section in .nemeda/agent-kit.json; add one to enable meeting capture.");
   }
   loadEnvLocal(context.root, environment);
+  const role = resolveRole(environment);
+  const inbox = meetings.inbox ? path.join(context.root, meetings.inbox) : null;
+  if (role !== "full" && !inbox) {
+    throw new Error(`NEMEDA_MEETINGS_ROLE=${role} needs \`meetings.inbox\` in .nemeda/agent-kit.json (a shared-drive folder both machines can see).`);
+  }
   const machine = probeHost(environment, options.probe);
   const selection = selectEngine(machine, environment, { explicit: options.engine || null });
   const engine = selection.engine;
@@ -59,11 +75,13 @@ export function resolveMeetings(start, options = {}) {
   return {
     root: context.root,
     config: meetings,
+    role,
+    inbox,
     machine,
     engine,
     engineReason: selection.reason,
     engineInstalled: selection.installed,
-    watch: resolveWatchFolder(environment, machine.platform),
+    watch: role === "transcriber" ? null : resolveWatchFolder(environment, machine.platform),
     model: engine.needsModel ? findWhisperModel(environment) : null,
     threads,
     language: meetings.language || context.config.policies?.conversationLanguage || "auto",
@@ -76,21 +94,33 @@ export function resolveMeetings(start, options = {}) {
   };
 }
 
+function transcribesInbox(resolved) {
+  return Boolean(resolved.inbox) && resolved.role !== "recorder";
+}
+
 export function listRecordings(start, options = {}) {
   const resolved = resolveMeetings(start, options);
   const state = readState(resolved.root);
-  const discovered = discoverRecordings(resolved.watch, state);
+  const local = discoverRecordings(resolved.watch, state);
+  const inbox = resolved.inbox && existsSync(resolved.inbox) ? discoverRecordings(resolved.inbox, readSharedState(resolved.inbox)) : null;
   return {
     root: resolved.root,
+    role: resolved.role,
     watch: resolved.watch,
+    inbox: resolved.inbox,
+    inboxExists: Boolean(inbox),
     engine: resolved.engine.name,
     engineReason: resolved.engineReason,
     engineInstalled: resolved.engineInstalled,
     model: resolved.model,
-    ready: discovered.ready,
-    pending: discovered.pending,
-    twins: discovered.twins,
-    processed: state.processed
+    ready: local.ready,
+    pending: local.pending,
+    twins: local.twins,
+    processed: state.processed,
+    inboxReady: inbox ? inbox.ready : [],
+    inboxPending: inbox ? inbox.pending : [],
+    inboxProcessed: inbox ? readSharedState(resolved.inbox).processed : [],
+    claims: resolved.inbox ? listClaims(resolved.inbox) : []
   };
 }
 
@@ -124,8 +154,11 @@ function uniqueTranscriptFolder(directory, name) {
   return candidate;
 }
 
+// `recording.inputPath` (a claimed inbox file) is what gets read; `recording.path`
+// stays the name everyone else knows the recording by.
 export function transcribeRecording(resolved, recording, { title, dryRun = false, actions = [] } = {}) {
   const sourceName = path.basename(recording.path);
+  const inputPath = recording.inputPath || recording.path;
   const timestamp = recordingTimestamp(recording.path, new Date(recording.mtime));
   const name = transcriptName(resolved.naming, { timestamp, title });
   const folder = uniqueTranscriptFolder(resolved.transcriptsDirectory, name);
@@ -145,10 +178,10 @@ export function transcribeRecording(resolved, recording, { title, dryRun = false
   }
   const workDirectory = mkdtempSync(path.join(os.tmpdir(), "nemeda-meeting-"));
   try {
-    let input = recording.path;
+    let input = inputPath;
     if (engine.needsWav) {
       input = path.join(workDirectory, "audio.wav");
-      run(resolved.ffmpeg, ["-y", "-loglevel", "error", "-i", recording.path, "-vn", "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", input], resolved.environment);
+      run(resolved.ffmpeg, ["-y", "-loglevel", "error", "-i", inputPath, "-vn", "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", input], resolved.environment);
       actions.push(action("audio", "ok", `${sourceName}: audio extracted with ffmpeg.`));
     }
     const outputBase = path.join(workDirectory, "transcript");
@@ -174,7 +207,7 @@ export function transcribeRecording(resolved, recording, { title, dryRun = false
       source: recording.path,
       sourceName,
       sizeBytes: recording.size,
-      sha256: sha256(recording.path),
+      sha256: sha256(inputPath),
       recordedAt: timestamp.toISOString(),
       durationSeconds: parsed.durationSeconds,
       engine: engine.name,
@@ -198,12 +231,99 @@ export function transcribeRecording(resolved, recording, { title, dryRun = false
   }
 }
 
+function processedEntry(recording, resolved, result) {
+  return {
+    path: recording.path,
+    size: recording.size,
+    mtime: recording.mtime,
+    transcript: path.relative(resolved.root, result.folder),
+    host: resolved.host,
+    processedAt: result.meta.processedAt
+  };
+}
+
+// Recorder side: copy every ready local recording into the inbox once.
+function handOffLocal(resolved, targets, state, actions, dryRun) {
+  const handed = [];
+  if (!existsSync(resolved.inbox)) {
+    actions.push(action("inbox", "error", `Inbox folder is missing: ${path.relative(resolved.root, resolved.inbox)}/ (run \`nemeda-agent setup\` so the Drive link exists).`));
+    return handed;
+  }
+  for (const recording of targets) {
+    const name = path.basename(recording.path);
+    if (dryRun) {
+      actions.push(action("handoff", "planned", `${name} -> ${path.relative(resolved.root, resolved.inbox)}/`));
+      continue;
+    }
+    try {
+      const { target, status } = handOffRecording(recording, resolved.inbox);
+      state.processed.push({ path: recording.path, size: recording.size, mtime: recording.mtime, handedOff: target, host: resolved.host, processedAt: new Date().toISOString() });
+      writeState(resolved.root, state);
+      handed.push({ source: recording, target });
+      actions.push(action("handoff", status, status === "created" ? `${name} copied to ${path.relative(resolved.root, resolved.inbox)}/; a transcriber will pick it up.` : `${name} is already in the inbox.`));
+    } catch (error) {
+      actions.push(action("handoff", "error", `${name}: ${error instanceof Error ? error.message : String(error)}`));
+    }
+  }
+  return handed;
+}
+
+// Transcriber side: claim, transcribe, release, record in the shared state.
+function drainInbox(resolved, actions, dryRun, title) {
+  const processed = [];
+  if (!existsSync(resolved.inbox)) {
+    actions.push(action("inbox", "error", `Inbox folder is missing: ${path.relative(resolved.root, resolved.inbox)}/ (run \`nemeda-agent setup\` so the Drive link exists).`));
+    return processed;
+  }
+  if (!dryRun) {
+    for (const released of reclaimStale(resolved.inbox, resolved.host)) {
+      actions.push(action("claim", "warn", `Released a stale claim of this machine on ${path.basename(released)}.`));
+    }
+    writeHeartbeat(resolved.inbox, resolved.host, { engine: resolved.engine.name, role: resolved.role });
+  }
+  const shared = readSharedState(resolved.inbox);
+  const discovered = discoverRecordings(resolved.inbox, shared);
+  const others = listClaims(resolved.inbox).filter((claim) => claim.host !== resolved.host);
+  actions.push(action("inbox", "ok", `${path.relative(resolved.root, resolved.inbox)}/: ${discovered.ready.length} ready, ${discovered.pending.length} still syncing, ${others.length} claimed by other machines, ${discovered.processed.length} already transcribed.`));
+  if (title && discovered.ready.length > 1) {
+    throw new Error(`--title applies to one recording, but ${discovered.ready.length} are ready in the inbox; pass the file explicitly.`);
+  }
+  for (const recording of discovered.ready) {
+    if (dryRun) {
+      transcribeRecording(resolved, recording, { title, dryRun, actions });
+      continue;
+    }
+    let claimed;
+    try {
+      claimed = claimRecording(recording.path, resolved.host);
+    } catch (error) {
+      actions.push(action("claim", "warn", `${path.basename(recording.path)} was taken by another machine (${error instanceof Error ? error.message : String(error)}).`));
+      continue;
+    }
+    try {
+      const result = transcribeRecording(resolved, { ...recording, inputPath: claimed }, { title, dryRun, actions });
+      if (result && !result.planned) {
+        const latest = readSharedState(resolved.inbox);
+        latest.processed.push({ ...processedEntry(recording, resolved, result), path: path.basename(recording.path) });
+        writeSharedState(resolved.inbox, latest);
+        processed.push(result);
+      }
+    } finally {
+      releaseClaim(claimed);
+    }
+  }
+  return processed;
+}
+
 export function processRecordings(start, options = {}) {
   const resolved = resolveMeetings(start, options);
   const dryRun = Boolean(options.dryRun);
   const actions = [];
   const state = readState(resolved.root);
-  let targets = [];
+  const processed = [];
+  const handedOff = [];
+  const canTranscribe = resolved.role !== "recorder";
+
   if (options.file) {
     const filePath = path.resolve(expandHome(options.file, options.environment || process.env));
     if (!existsSync(filePath)) throw new Error(`Recording not found: ${filePath}`);
@@ -211,39 +331,53 @@ export function processRecordings(start, options = {}) {
     const entry = { path: filePath, size: stat.size, mtime: stat.mtimeMs };
     const already = state.processed.find((record) => recordKey(record) === recordKey(entry));
     if (already) {
-      actions.push(action("transcript", "kept", `${path.basename(filePath)} was already transcribed to ${already.transcript}/.`));
+      actions.push(action("transcript", "kept", already.transcript ? `${path.basename(filePath)} was already transcribed to ${already.transcript}/.` : `${path.basename(filePath)} was already handed off to the inbox.`));
+    } else if (!canTranscribe) {
+      handedOff.push(...handOffLocal(resolved, [entry], state, actions, dryRun));
+    } else if (!dryRun && !existsSync(resolved.transcriptsDirectory)) {
+      actions.push(action("folder", "error", `Transcripts folder is missing: ${path.relative(resolved.root, resolved.transcriptsDirectory)}/ (run \`nemeda-agent setup\` so the Drive link exists).`));
     } else {
-      targets = [entry];
+      const result = transcribeRecording(resolved, entry, { title: options.title, dryRun, actions });
+      if (result && !result.planned) {
+        state.processed.push(processedEntry(entry, resolved, result));
+        writeState(resolved.root, state);
+        processed.push(result);
+      }
     }
-  } else {
-    if (!resolved.watch) {
-      throw new Error("No recordings folder: set NEMEDA_MEETINGS_WATCH in .env.local (OBS's recording folder was not detected), or pass a file.");
-    }
+    return { root: resolved.root, role: resolved.role, dryRun, actions, processed, handedOff };
+  }
+
+  // Local folder: recorders hand off, transcribers have none, full transcribes.
+  if (resolved.watch) {
     const discovered = discoverRecordings(resolved.watch, state);
-    actions.push(action("discover", "ok", `${resolved.watch}: ${discovered.ready.length} ready, ${discovered.pending.length} still being written, ${discovered.processed.length} already transcribed.`));
+    actions.push(action("discover", "ok", `${resolved.watch}: ${discovered.ready.length} ready, ${discovered.pending.length} still being written, ${discovered.processed.length} already ${canTranscribe ? "transcribed" : "handed off"}.`));
     if (options.title && discovered.ready.length > 1) {
       throw new Error(`--title applies to one recording, but ${discovered.ready.length} are ready; pass the file explicitly.`);
     }
-    targets = discovered.ready;
+    if (!canTranscribe) {
+      handedOff.push(...handOffLocal(resolved, discovered.ready, state, actions, dryRun));
+    } else if (discovered.ready.length && !dryRun && !existsSync(resolved.transcriptsDirectory)) {
+      actions.push(action("folder", "error", `Transcripts folder is missing: ${path.relative(resolved.root, resolved.transcriptsDirectory)}/ (run \`nemeda-agent setup\` so the Drive link exists).`));
+    } else {
+      for (const recording of discovered.ready) {
+        const result = transcribeRecording(resolved, recording, { title: options.title, dryRun, actions });
+        if (!result || result.planned) continue;
+        state.processed.push(processedEntry(recording, resolved, result));
+        writeState(resolved.root, state);
+        processed.push(result);
+      }
+    }
+  } else if (resolved.role === "full") {
+    throw new Error("No recordings folder: set NEMEDA_MEETINGS_WATCH in .env.local (OBS's recording folder was not detected), or pass a file.");
   }
-  if (!dryRun && !existsSync(resolved.transcriptsDirectory)) {
-    actions.push(action("folder", "error", `Transcripts folder is missing: ${path.relative(resolved.root, resolved.transcriptsDirectory)}/ (run \`nemeda-agent setup\` so the Drive link exists).`));
-    return { root: resolved.root, dryRun, actions, processed: [] };
+
+  // Shared inbox: transcribers and full machines drain it.
+  if (transcribesInbox(resolved)) {
+    if (!dryRun && !existsSync(resolved.transcriptsDirectory)) {
+      actions.push(action("folder", "error", `Transcripts folder is missing: ${path.relative(resolved.root, resolved.transcriptsDirectory)}/ (run \`nemeda-agent setup\` so the Drive link exists).`));
+    } else {
+      processed.push(...drainInbox(resolved, actions, dryRun, options.title));
+    }
   }
-  const processed = [];
-  for (const recording of targets) {
-    const result = transcribeRecording(resolved, recording, { title: options.title, dryRun, actions });
-    if (!result || result.planned) continue;
-    state.processed.push({
-      path: recording.path,
-      size: recording.size,
-      mtime: recording.mtime,
-      transcript: path.relative(resolved.root, result.folder),
-      host: resolved.host,
-      processedAt: result.meta.processedAt
-    });
-    writeState(resolved.root, state);
-    processed.push(result);
-  }
-  return { root: resolved.root, dryRun, actions, processed };
+  return { root: resolved.root, role: resolved.role, dryRun, actions, processed, handedOff };
 }

@@ -107,7 +107,9 @@ Commands:
              server    list relays, or switch which one this runner uses
   meeting  Turn finished meeting recordings into filed transcripts (needs a
            \`meetings\` section in .nemeda/agent-kit.json; see
-           docs/meeting-capture-plan.md).
+           docs/meeting-capture-plan.md). NEMEDA_MEETINGS_ROLE in .env.local
+           splits the work across machines: recorder (hands recordings to
+           meetings.inbox), transcriber (drains the inbox), full (default).
              process   transcribe every ready recording in the watched folder
                        (OBS's recording folder, or NEMEDA_MEETINGS_WATCH), or
                        one FILE; files <date>-<slug>/ under meetings.transcripts
@@ -234,7 +236,9 @@ async function runMeeting(options) {
       return 0;
     }
     console.log(`Nemeda Agent Kit meetings at ${listing.root}`);
-    console.log(`Recordings folder: ${listing.watch || "not configured (set NEMEDA_MEETINGS_WATCH in .env.local)"}`);
+    console.log(`Role: ${listing.role}`);
+    if (listing.role !== "transcriber") console.log(`Recordings folder: ${listing.watch || "not configured (set NEMEDA_MEETINGS_WATCH in .env.local)"}`);
+    if (listing.inbox) console.log(`Shared inbox: ${listing.inbox}${listing.inboxExists ? "" : " (missing)"}`);
     console.log(`Engine: ${listing.engine} (${listing.engineReason})${listing.engine === "apple-speech" ? "" : listing.model ? `, model ${listing.model}` : ", no model found: run `nemeda-agent meeting setup`"}`);
     const describe = (entry) => `${entry.path} (${(entry.size / 1024 / 1024).toFixed(0)} MB)`;
     console.log(`\nReady (${listing.ready.length}):`);
@@ -243,9 +247,15 @@ async function runMeeting(options) {
       console.log(`\nStill being written (${listing.pending.length}):`);
       for (const entry of listing.pending) console.log(`  ${describe(entry)}`);
     }
-    console.log(`\nTranscribed (${listing.processed.length}):`);
-    for (const entry of listing.processed.slice(-10)) console.log(`  ${path.basename(entry.path)} -> ${entry.transcript}/`);
-    if (listing.ready.length) console.log("\nRun `nemeda-agent meeting process` to transcribe the ready recordings.");
+    console.log(`\n${listing.role === "recorder" ? "Handed off" : "Transcribed"} (${listing.processed.length}):`);
+    for (const entry of listing.processed.slice(-10)) console.log(`  ${path.basename(entry.path)} -> ${entry.transcript ? `${entry.transcript}/` : "inbox"}`);
+    if (listing.inbox && listing.inboxExists) {
+      console.log(`\nShared inbox: ${listing.inboxReady.length} waiting, ${listing.inboxPending.length} still syncing, ${listing.claims.length} claimed, ${listing.inboxProcessed.length} transcribed`);
+      for (const entry of listing.inboxReady) console.log(`  waiting  ${describe(entry)}`);
+      for (const claim of listing.claims) console.log(`  claimed  ${path.basename(claim.original)} by ${claim.host}`);
+    }
+    const pendingWork = listing.ready.length + (listing.role === "recorder" ? 0 : listing.inboxReady.length);
+    if (pendingWork) console.log(`\nRun \`nemeda-agent meeting process\` to ${listing.role === "recorder" ? "hand the ready recordings to the inbox" : "transcribe the waiting recordings"}.`);
     return 0;
   }
   if (subcommand === "process") {

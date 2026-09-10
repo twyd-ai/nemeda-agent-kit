@@ -7,14 +7,19 @@ import { existsSync, statSync } from "node:fs";
 import path from "node:path";
 import { ENV_LOCAL_NAME, loadEnvLocal } from "./env.mjs";
 import {
+  HEARTBEAT_STALE_HOURS,
   MODEL_TIERS,
+  activeTranscribers,
   discoverRecordings,
   findWhisperModel,
   installCommands,
+  listClaims,
   minutesPerHour,
   probeHost,
+  readSharedState,
   readState,
   recommendTier,
+  resolveRole,
   resolveWatchFolder,
   selectEngine,
   tierOfModel
@@ -27,7 +32,14 @@ export function resolveMeetingHost(root, environment = process.env, { explicitEn
   const host = probeHost(scratch, probe);
   const selection = selectEngine(host, scratch, { explicit: explicitEngine, allowUninstalled });
   const tier = recommendTier(host);
-  return { environment: scratch, host, selection, tier, model: findWhisperModel(scratch), watch: resolveWatchFolder(scratch, host.platform) };
+  let role = null;
+  let roleError = null;
+  try {
+    role = resolveRole(scratch);
+  } catch (error) {
+    roleError = error instanceof Error ? error.message : String(error);
+  }
+  return { environment: scratch, host, selection, tier, role, roleError, model: findWhisperModel(scratch), watch: resolveWatchFolder(scratch, host.platform) };
 }
 
 function describeHost(host) {
@@ -44,8 +56,51 @@ function firstSegment(relativePath) {
 export function meetingDoctorChecks(root, meetingsConfig, driveConfig, environment = process.env, options = {}) {
   const checks = [];
   const resolved = resolveMeetingHost(root, environment, options);
-  const { host, selection, tier, model, watch } = resolved;
+  const { host, selection, tier, model, watch, role, roleError } = resolved;
   const engine = selection.engine;
+  const inbox = meetingsConfig.inbox ? path.join(root, meetingsConfig.inbox) : null;
+
+  if (roleError) {
+    checks.push({ status: "fail", code: "meetings-role", message: roleError });
+  } else if (role !== "full" && !inbox) {
+    checks.push({ status: "fail", code: "meetings-role", message: `Role ${role} needs meetings.inbox in .nemeda/agent-kit.json (a shared-drive folder every machine can see).` });
+  } else {
+    const roleText = { recorder: "records and hands finished recordings to the shared inbox; no transcription tools needed here", transcriber: "transcribes the shared inbox for the whole team", full: inbox ? "transcribes its own recordings and the shared inbox" : "records and transcribes on this machine" }[role];
+    checks.push({ status: "pass", code: "meetings-role", message: `Role ${role}${resolved.environment.NEMEDA_MEETINGS_ROLE ? "" : " (default)"}: ${roleText}.` });
+  }
+  if (inbox) {
+    const links = new Set(Object.keys(driveConfig?.links || {}));
+    if (!existsSync(inbox)) {
+      checks.push({ status: "fail", code: "meetings-inbox", message: `${meetingsConfig.inbox}/ is missing; run \`nemeda-agent setup\` (Drive link) or create it on the shared drive.` });
+    } else if (driveConfig && !links.has(firstSegment(meetingsConfig.inbox))) {
+      checks.push({ status: "warn", code: "meetings-inbox", message: `${meetingsConfig.inbox}/ is not inside a Drive link; other machines cannot see it.` });
+    } else {
+      checks.push({ status: "pass", code: "meetings-inbox", message: `Inbox ${meetingsConfig.inbox}/ exists${driveConfig ? " on the shared drive" : ""}.` });
+    }
+    if (existsSync(inbox)) {
+      const active = activeTranscribers(inbox);
+      const claims = listClaims(inbox);
+      const shared = discoverRecordings(inbox, readSharedState(inbox));
+      if (role === "recorder") {
+        checks.push(active.length
+          ? { status: "pass", code: "meetings-transcriber", message: `${active.length} transcriber(s) seen in the last ${HEARTBEAT_STALE_HOURS} h: ${active.map((beat) => `${beat.host} (${beat.engine || "?"})`).join(", ")}.` }
+          : { status: "warn", code: "meetings-transcriber", message: `No transcriber has reported in the last ${HEARTBEAT_STALE_HOURS} h; recordings will pile up in the inbox until one runs \`nemeda-agent meeting process\`.` });
+      }
+      const inboxBacklog = [];
+      if (shared.ready.length) inboxBacklog.push(`${shared.ready.length} waiting`);
+      if (shared.pending.length) inboxBacklog.push(`${shared.pending.length} still syncing`);
+      if (claims.length) inboxBacklog.push(`${claims.length} claimed (${claims.map((claim) => claim.host).join(", ")})`);
+      checks.push(shared.ready.length && role !== "recorder"
+        ? { status: "warn", code: "meetings-inbox-backlog", message: `Inbox: ${inboxBacklog.join(", ")}; run \`nemeda-agent meeting process\`.` }
+        : { status: "pass", code: "meetings-inbox-backlog", message: `Inbox: ${inboxBacklog.length ? inboxBacklog.join(", ") : "empty"}.` });
+    }
+  }
+  if (role === "recorder") {
+    checks.push(watch && existsSync(watch)
+      ? { status: "pass", code: "meetings-watch", message: `Recordings folder: ${watch}${resolved.environment.NEMEDA_MEETINGS_WATCH ? "" : " (from OBS)"}.` }
+      : { status: "warn", code: "meetings-watch", message: `No recordings folder: OBS is ${host.tools.obs ? "installed but its profile has no RecFilePath" : "not installed"}; set NEMEDA_MEETINGS_WATCH in ${ENV_LOCAL_NAME}.` });
+    return checks;
+  }
 
   // Capability and recommendation.
   const estimateFor = (name, modelTier) => {
@@ -95,8 +150,10 @@ export function meetingDoctorChecks(root, meetingsConfig, driveConfig, environme
     }
   }
 
-  // Watch folder.
-  if (!watch) {
+  // Watch folder (not for transcribers, which only read the inbox).
+  if (role === "transcriber") {
+    // nothing local to watch
+  } else if (!watch) {
     checks.push({ status: "warn", code: "meetings-watch", message: `No recordings folder: OBS is ${host.tools.obs ? "installed but its profile has no RecFilePath" : "not installed"}; set NEMEDA_MEETINGS_WATCH in ${ENV_LOCAL_NAME}.` });
   } else if (!existsSync(watch)) {
     checks.push({ status: "fail", code: "meetings-watch", message: `Recordings folder does not exist: ${watch}.` });
@@ -138,10 +195,30 @@ export function meetingInboxContext(root, meetingsConfig, environment = process.
   if (!root || !meetingsConfig) return "";
   const scratch = { ...environment };
   loadEnvLocal(root, scratch);
-  const watch = resolveWatchFolder(scratch);
-  if (!watch || !existsSync(watch) || !statSync(watch).isDirectory()) return "";
-  const discovered = discoverRecordings(watch, readState(root));
-  if (discovered.ready.length === 0) return "";
-  const names = discovered.ready.slice(0, 5).map((entry) => path.basename(entry.path)).join(", ");
-  return `Meeting recordings waiting: ${discovered.ready.length} in ${watch} (${names}${discovered.ready.length > 5 ? ", …" : ""}). Transcribe them with \`nemeda-agent meeting process\` (add --title "…" for one file); never transcribe or copy them by hand.`;
+  let role;
+  try {
+    role = resolveRole(scratch);
+  } catch {
+    return "";
+  }
+  const parts = [];
+  const names = (entries) => entries.slice(0, 5).map((entry) => path.basename(entry.path)).join(", ") + (entries.length > 5 ? ", …" : "");
+  if (role !== "transcriber") {
+    const watch = resolveWatchFolder(scratch);
+    if (watch && existsSync(watch) && statSync(watch).isDirectory()) {
+      const local = discoverRecordings(watch, readState(root));
+      if (local.ready.length) {
+        parts.push(role === "recorder"
+          ? `${local.ready.length} recording(s) in ${watch} waiting to be handed to the team inbox (${names(local.ready)})`
+          : `${local.ready.length} recording(s) in ${watch} waiting to be transcribed (${names(local.ready)})`);
+      }
+    }
+  }
+  const inbox = meetingsConfig.inbox ? path.join(root, meetingsConfig.inbox) : null;
+  if (inbox && role !== "recorder" && existsSync(inbox)) {
+    const shared = discoverRecordings(inbox, readSharedState(inbox));
+    if (shared.ready.length) parts.push(`${shared.ready.length} team recording(s) in the shared inbox ${meetingsConfig.inbox}/ (${names(shared.ready)})`);
+  }
+  if (parts.length === 0) return "";
+  return `Meeting recordings waiting: ${parts.join("; ")}. Handle them with \`nemeda-agent meeting process\` (add --title "…" for one file); never transcribe or copy them by hand.`;
 }

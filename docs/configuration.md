@@ -341,10 +341,11 @@ the airtable.com URL.
 Turns finished meeting recordings into transcripts filed on the shared drive.
 Optional; omit it and `nemeda-agent meeting` refuses to run. Design and
 roadmap in [meeting-capture-plan.md](meeting-capture-plan.md); this is what
-phases 1 and 2 ship.
+phases 1 to 3 ship.
 
 ```json
 "meetings": {
+  "inbox": "docs/recordings/inbox",
   "transcripts": "docs/transcripts",
   "notes": "docs/meetings",
   "language": "es",
@@ -364,13 +365,17 @@ phases 1 and 2 ship.
 - `naming`: folder template; `{date}` is required, `{time}` and `{slug}`
   optional. The slug comes from `--title`, sanitised to the strictest shared
   drive's character set.
-- `inbox`, `knowledgeLog`, `recordings`: reserved for the team-roles and
-  notes phases; accepted and validated, not yet acted on.
+- `inbox`: shared-drive folder where recorders drop finished recordings and
+  transcribers pick them up (see Team roles). Optional; without it every
+  machine records and transcribes on its own.
+- `knowledgeLog`, `recordings`: reserved for the notes phase; accepted and
+  validated, not yet acted on.
 
 Machine-local settings go in `.env.local`, never in the shared config.
 `nemeda-agent meeting setup` writes the first two after choosing for you:
 
 ```
+NEMEDA_MEETINGS_ROLE=full                      # recorder | transcriber | full (default)
 NEMEDA_MEETINGS_ENGINE=apple-speech            # apple-speech | whisper-cpp; default: what doctor selects
 NEMEDA_WHISPER_MODEL=~/.nemeda/models/ggml-large-v3-turbo.bin   # whisper only; default: best ggml-*.bin in ~/.nemeda/models or ~/whisper-models
 NEMEDA_MEETINGS_WATCH=/Users/me/Movies        # default: OBS's recording folder from its active profile
@@ -378,6 +383,28 @@ NEMEDA_WHISPER_BIN=whisper-cli                 # default: whisper-cli on PATH
 NEMEDA_YAP_BIN=yap                             # default: yap on PATH
 NEMEDA_MEETINGS_THREADS=8                      # whisper only; default: all cores
 ```
+
+### Team roles
+
+Not every machine has to transcribe. With `meetings.inbox` declared, each
+machine picks a role in `.env.local`:
+
+| Role | Does | Needs |
+|---|---|---|
+| `recorder` | copies every finished local recording into the inbox, once | the Drive link only |
+| `transcriber` | drains the inbox: claims a recording, transcribes it, files the transcript | an engine (plus a model for whisper) |
+| `full` (default) | transcribes its own recordings and, when an inbox exists, the team's | same as transcriber |
+
+One transcriber per team is enough, usually the most capable Mac. Several
+can run at once: a recording is claimed by renaming it to
+`<name>.claimed-<host>` (atomic, invisible to the other transcribers) and
+renamed back when done; what is done is recorded in `<inbox>/.processed.json`
+by name, so it is the same on every machine whatever its mount path; and each
+transcriber leaves a heartbeat in `<inbox>/.transcribers.json` that a
+recorder's `doctor` reads to warn when nobody has transcribed for 48 hours.
+A claim left by a machine that died is released the next time that machine
+runs; claims by other machines are listed by `meeting list` and never
+touched. Originals stay where the recorder put them.
 
 ### Engines
 
@@ -403,10 +430,11 @@ machine should only record). `base` exists for `setup --model base`.
   (`.nemeda/state/meetings.json`), existing transcript folders are never
   overwritten (a second recording with the same name gets a numeric suffix),
   and the original recording is left where it was.
-- `nemeda-agent meeting doctor`: machine capability and estimate per hour of
-  audio, engine selection and why, ffmpeg and model, recordings folder,
-  transcripts/notes folders and whether they sit inside a Drive link, and the
-  backlog. The same checks appear in `nemeda-agent doctor` and the
+- `nemeda-agent meeting doctor`: role, inbox and transcriber heartbeat,
+  machine capability and estimate per hour of audio, engine selection and
+  why, ffmpeg and model, recordings folder, transcripts/notes folders and
+  whether they sit inside a Drive link, and the local and inbox backlogs. A
+  recorder only gets the role, inbox, and recordings-folder checks. The same checks appear in `nemeda-agent doctor` and the
   `workspace_doctor` MCP tool when the section exists.
 - `nemeda-agent meeting setup [--obs] [--model TIER] [--yes] [--dry-run]`:
   shows the plan (Homebrew or winget installs, model download to
