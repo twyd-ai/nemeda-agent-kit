@@ -391,25 +391,29 @@ scheduler has to be local.
    only user and assistant text, and summarises it with a fresh `-p` /
    `exec` call. Runs one session at a time, never inside a hook, and bills
    the person's own subscription like the Slack bridge.
-3. **Triggers — pending.** Two, so it works with and without installing
-   anything; `nemeda-agent memory harvest` itself is shipped, but nothing
-   calls it automatically yet:
-   - **Opportunistic**: the `SessionStart` hook, after writing the ledger,
-     spawns `memory harvest` as a *detached* child (`spawn` with
-     `detached: true`, `stdio: "ignore"`, `unref()`), so the hook returns
-     immediately and yesterday's sessions get summarised while today's
-     starts. This alone covers most people: the next session harvests the
-     previous ones.
-   - **Scheduled**: `nemeda-agent memory install` registers a local job
+3. **Triggers.** Two, so it works with and without installing anything:
+   - **Opportunistic — shipped**: the `SessionStart` hook (hooks.json passes
+     `--session-start`; `Stop` fires after every turn and never triggers),
+     after writing the ledger, spawns `memory harvest` as a *detached* child
+     (`detached: true`, output to `.nemeda/state/harvest.log`, `unref()`)
+     when `MEMORY_HARVEST=true` and earlier sessions have closed, so the
+     hook returns immediately and yesterday's sessions get summarised while
+     today's starts. This alone covers most people: the next session
+     harvests the previous ones. A per-machine lock
+     (`.nemeda/state/harvest.lock`, taken over when its pid is dead or it
+     is over an hour old) keeps this run and a manual one from resuming the
+     same session twice.
+      - **Scheduled — pending**: `nemeda-agent memory install` registers a local job
      every 30 minutes and at login — launchd on macOS (same code path as
      `slack install`), a systemd user timer on Linux, Task Scheduler on
      Windows — for machines where sessions must be logged the same day even
      if no new session is opened.
 
-   Until either lands, running `nemeda-agent memory harvest` is a manual
-   (or externally cron'd) step.
+      Until the scheduled trigger lands, a machine where nobody opens a new
+   session never harvests; `nemeda-agent memory harvest` by hand covers
+   that case.
 
-The `SessionStart` context line — pending — closes the loop: "3 session
+The `SessionStart` context line — shipped — closes the loop: "3 session
 entries from this week are pending your review; run
 `nemeda-agent memory review`". Reviewing an entry whose summary already
 exists is a confirmation, not a writing task, which is what removes the
@@ -570,14 +574,13 @@ for both sides.
      harvested either way. Gated by `MEMORY_HARVEST=true`; guarded against
      recursion via `NEMEDA_MEMORY_HARVESTER=1` on the resumed session's
      environment, so a harvested session can never record or re-harvest
-     itself. Still pending from the original design: the opportunistic
-     detached spawn from `SessionStart` (today `memory harvest` is run by
-     hand or by an external scheduler, not triggered automatically), the
+     itself. The opportunistic trigger from `SessionStart` (detached, with a
+     per-machine lock and `harvest.log`) and the pending-review context
+     line are shipped too. Still pending from the original design: the
      "read the raw transcript" fallback for a session that can no longer be
      resumed (a failed resume is recorded as a harvest error today, never
      fabricated), `memory install`/`uninstall`'s local scheduler
-     (launchd/systemd/Task Scheduler), the `memory-harvest` doctor check,
-     and the `SessionStart` context line naming pending-review entries.
+     (launchd/systemd/Task Scheduler), and the `memory-harvest` doctor check.
    - **1b-iv, pending**: `import-airtable`, migrating existing Knowledge Log
      bases into journals.
 2. **Meeting integration** (with `meeting-capture-plan.md` phase 3): the

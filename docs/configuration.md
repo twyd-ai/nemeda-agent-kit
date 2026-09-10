@@ -574,11 +574,19 @@ the ledger is free and always on regardless of that flag.
 `NEMEDA_CLAUDE_BIN` / `NEMEDA_CODEX_BIN` in `.env.local` override which
 binary runs, for a non-default install or for tests.
 
-Nothing calls `memory harvest` automatically yet — no opportunistic trigger
-from `SessionStart`, no `memory install` scheduler, no doctor check, no
-`SessionStart` context line naming what is pending review. Run it by hand,
-or from your own cron/scheduled task, until that lands; see
-memory-plan.md's phase 1b-iii for the design.
+When `MEMORY_HARVEST=true`, the `SessionStart` hook starts `memory harvest`
+in the background whenever earlier sessions have closed: the new session
+starts immediately, and the previous ones are summarised while it runs.
+Output goes to `.nemeda/state/harvest.log`. A per-machine lock at
+`.nemeda/state/harvest.lock` keeps a background run and a manual one from
+resuming the same session twice; a lock left by a crashed run is taken
+over automatically. The same hook also tells the agent how many of your
+entries are pending review. `Stop` only records activity and never starts
+a harvest, because it fires after every turn.
+
+Still pending: a `memory install` scheduler for machines where sessions
+must be summarised the same day even if no new session is opened, and the
+doctor check; see memory-plan.md's phase 1b-iii.
 
 `airtable.knowledgeLog` still works but is deprecated in favor of this
 section (`nemeda-agent doctor` reports it); it will be removed once the
