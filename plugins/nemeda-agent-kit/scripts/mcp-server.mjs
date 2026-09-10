@@ -1,6 +1,5 @@
 #!/usr/bin/env node
-import path from "node:path";
-import { filterEntries, latestRevisions, readAllJournals, searchEntries } from "./lib/memory.mjs";
+import { queryEntries } from "./lib/memory-index.mjs";
 import {
   defaultWorkspaceDirectory,
   loadSchema,
@@ -82,20 +81,21 @@ const tools = [
   }
 ];
 
-// Shared by every memory_* tool: resolves the project's memory folder from
-// the workspace config and returns every entry's latest revision, freshest
-// first. Read-only, same trust boundary as workspace_context/doctor — never
-// writes, and returns a clear `error` string (not a thrown exception) when
-// memory is not configured, so a tool call always gets a JSON answer.
-function loadMemoryEntries(cwd) {
+// Shared by every memory_* tool: answers through the machine-local index
+// (scripts/lib/memory-index.mjs), which rebuilds itself from the journals
+// when they change and falls back to reading them directly if the index
+// engine fails. The journals are never written here — same read-only trust
+// boundary as workspace_context/doctor (the index cache under
+// .nemeda/state/ is local, disposable state, not project content). Returns a
+// clear `error` string, not a thrown exception, when memory is not
+// configured, so a tool call always gets a JSON answer.
+function loadMemoryEntries(cwd, request = {}) {
   const context = readWorkspaceContext(cwd);
   if (context.mode !== "configured" || !context.config?.memory) {
     return { error: "No `memory` section in .nemeda/agent-kit.json for this repository; see docs/memory-plan.md." };
   }
-  const memoryRoot = path.join(context.root, context.config.memory.project.path);
-  const { entries: raw, malformed } = readAllJournals(memoryRoot);
-  const entries = latestRevisions(raw).sort((a, b) => (a.date < b.date ? 1 : -1));
-  return { entries, malformed, root: context.root, memoryRoot };
+  const answer = queryEntries(context.root, context.config, request);
+  return { entries: answer.entries, engine: answer.engine, ...(answer.fallback ? { fallback: answer.fallback } : {}) };
 }
 
 function memoryFilters(args) {
@@ -116,15 +116,15 @@ function toolResult(name, args = {}) {
   if (name === "workspace_doctor") return textResult(workspaceDoctor(cwd));
   if (name === "workspace_config_schema") return textResult(loadSchema());
   if (name === "memory_search") {
-    const { entries, error } = loadMemoryEntries(cwd);
+    const { entries, error, engine, fallback } = loadMemoryEntries(cwd, { query: args.query || "", filters: memoryFilters(args) });
     if (error) return textResult({ error }, true);
-    return textResult({ results: searchEntries(entries, args.query || "", memoryFilters(args)) });
+    return textResult({ results: entries, engine, ...(fallback ? { fallback } : {}) });
   }
   if (name === "memory_recent") {
-    const { entries, error } = loadMemoryEntries(cwd);
+    const { entries, error, engine, fallback } = loadMemoryEntries(cwd, { filters: memoryFilters(args) });
     if (error) return textResult({ error }, true);
     const limit = Number.isInteger(args.limit) ? Math.min(Math.max(args.limit, 1), 200) : 20;
-    return textResult({ results: filterEntries(entries, memoryFilters(args)).slice(0, limit) });
+    return textResult({ results: entries.slice(0, limit), engine, ...(fallback ? { fallback } : {}) });
   }
   if (name === "memory_get") {
     const { entries, error } = loadMemoryEntries(cwd);

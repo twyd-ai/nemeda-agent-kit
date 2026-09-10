@@ -41,6 +41,7 @@ function parseArguments(argv) {
     else if (value === "--all") options.all = true;
     else if (value === "--session") options.sessionId = rest[++index];
     else if (value === "--previous") options.previous = true;
+    else if (value === "--rebuild") options.rebuild = true;
     else if (value === "--model") options.model = rest[++index];
     else if (value === "--obs") options.obs = true;
     else if (value === "--yes" || value === "-y") options.yes = true;
@@ -83,6 +84,7 @@ Usage:
   nemeda-agent memory search "query" [--pending] [--type TYPE] [--json]
   nemeda-agent memory review [ID] [--all] [--json]
   nemeda-agent memory harvest [--session ID] [--dry-run] [--json]
+  nemeda-agent memory index [--rebuild] [--json]
 
 Commands:
   init     Create missing .nemeda/agent-kit.json and AGENTS.md safely.
@@ -144,6 +146,11 @@ Commands:
                        .env.local (it invokes claude/codex and costs
                        tokens); NEMEDA_CLAUDE_BIN / NEMEDA_CODEX_BIN override
                        the binary used.
+             index     show the machine-local query index (.nemeda/state/
+                       memory.sqlite: engine, entry count, up to date or
+                       not); --rebuild forces a rebuild. Never on the shared
+                       drive — list/search rebuild it automatically when the
+                       journals change.
 `;
 }
 
@@ -374,35 +381,51 @@ async function runMemory(options) {
     return 0;
   }
 
-  const { entries: rawEntries } = memoryLib.readAllJournals(memoryRoot);
-  const entries = memoryLib.latestRevisions(rawEntries).sort((a, b) => (a.date < b.date ? 1 : -1));
   const filters = { type: options.type, author: options.author, status: options.pending ? "pending" : undefined, since: options.since };
 
-  if (subcommand === "list") {
-    const filtered = memoryLib.filterEntries(entries, filters);
+  if (subcommand === "list" || subcommand === "search") {
+    if (subcommand === "search" && !options.query) throw new Error('memory search needs a query: nemeda-agent memory search "..."');
+    const { queryEntries } = await import("./lib/memory-index.mjs");
+    const answer = queryEntries(context.root, context.config, { query: subcommand === "search" ? options.query : "", filters });
+    if (answer.fallback) console.error(`nemeda-agent: ${answer.fallback}`);
     if (options.json) {
-      print(filtered, true);
+      print(answer.entries, true);
       return 0;
     }
-    console.log(`Nemeda Agent Kit memory at ${memoryRoot} (${filtered.length} of ${entries.length} entries)`);
-    for (const entry of filtered) console.log(summarizeMemoryEntry(entry));
-    return 0;
-  }
-
-  if (subcommand === "search") {
-    if (!options.query) throw new Error('memory search needs a query: nemeda-agent memory search "..."');
-    const results = memoryLib.searchEntries(entries, options.query, filters);
-    if (options.json) {
-      print(results, true);
+    if (subcommand === "list") {
+      console.log(`Nemeda Agent Kit memory at ${memoryRoot} (${answer.entries.length} entries, ${answer.engine} engine)`);
+      for (const entry of answer.entries) console.log(summarizeMemoryEntry(entry));
       return 0;
     }
-    console.log(`${results.length} result(s) for "${options.query}":`);
-    for (const entry of results) {
+    console.log(`${answer.entries.length} result(s) for "${options.query}":`);
+    for (const entry of answer.entries) {
       const preview = entry.summary.length > 200 ? `${entry.summary.slice(0, 200)}…` : entry.summary;
       console.log(`${summarizeMemoryEntry(entry)}\n  ${preview}`);
     }
     return 0;
   }
+
+  if (subcommand === "index") {
+    const { indexStatus, rebuildIndex } = await import("./lib/memory-index.mjs");
+    const report = options.rebuild ? rebuildIndex(context.root, context.config, { force: true }) : indexStatus(context.root, context.config);
+    if (options.json) {
+      print(report, true);
+      return 0;
+    }
+    console.log(`Engine: ${report.engine} (${report.reason})`);
+    if (report.engine === "memory") {
+      console.log("No index file: every query scans the journals directly.");
+      return 0;
+    }
+    if (options.rebuild) console.log(`Rebuilt ${report.path} with ${report.count} entries.`);
+    else console.log(`Index: ${report.path} — ${report.exists ? `${report.count ?? "?"} entries, ${report.fresh ? "up to date" : "stale (rebuilt automatically on the next query)"}` : "not built yet (built automatically on the first query)"}.`);
+    return 0;
+  }
+
+  // Review writes a revision, so it reads the journals — the source of
+  // truth — directly, never the local index cache.
+  const { entries: rawEntries } = memoryLib.readAllJournals(memoryRoot);
+  const entries = memoryLib.latestRevisions(rawEntries).sort(memoryLib.compareEntriesNewestFirst);
 
   if (subcommand === "review") {
     const author = memoryLib.resolveAuthorEmail(context.root);
@@ -481,7 +504,7 @@ async function runMemory(options) {
     return results.some((result) => !result.ok) ? 1 : 0;
   }
 
-  throw new Error(`Unknown memory subcommand: ${subcommand}; use add, list, search, review, or harvest.`);
+  throw new Error(`Unknown memory subcommand: ${subcommand}; use add, list, search, review, harvest, or index.`);
 }
 
 async function runSlack(options) {
