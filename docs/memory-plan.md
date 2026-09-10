@@ -403,15 +403,22 @@ scheduler has to be local.
      (`.nemeda/state/harvest.lock`, taken over when its pid is dead or it
      is over an hour old) keeps this run and a manual one from resuming the
      same session twice.
-      - **Scheduled — pending**: `nemeda-agent memory install` registers a local job
+      - **Scheduled — shipped**: `nemeda-agent memory install` registers a local job
      every 30 minutes and at login — launchd on macOS (same code path as
      `slack install`), a systemd user timer on Linux, Task Scheduler on
      Windows — for machines where sessions must be logged the same day even
      if no new session is opened.
 
-      Until the scheduled trigger lands, a machine where nobody opens a new
-   session never harvests; `nemeda-agent memory harvest` by hand covers
-   that case.
+      The scheduled job (`scripts/lib/harvest-scheduler.mjs`) is one per
+   workspace and is activated by `install` itself (launchctl bootstrap,
+   systemctl --user enable --now, schtasks /Create) rather than printed as
+   next steps, since a trigger that needs a manual step would bring back
+   the forgetting. It embeds the plugin's absolute path, which changes on
+   every plugin update, so `install` is an upsert: re-running it rewrites
+   what changed and re-activates. On Windows the task calls a `.cmd`
+   wrapper, keeping `/TR` under schtasks' 261-character limit and
+   appending output to the log. Both triggers run `memory harvest`, which
+   takes the per-machine lock, so they never resume a session twice.
 
 The `SessionStart` context line — shipped — closes the loop: "3 session
 entries from this week are pending your review; run
@@ -487,7 +494,7 @@ nemeda-agent memory list [--pending] [--type T] [--author E] [--since D]     # s
 nemeda-agent memory search QUERY [--central] [--json]                       # shipped (no --central yet)
 nemeda-agent memory review [ID] [--all] [--json]                            # shipped; ID completes an entry, no ID lists the inbox
 nemeda-agent memory harvest [--session ID] [--dry-run] [--json]        # shipped; no flag = every closed session
-nemeda-agent memory install | uninstall                                # local scheduler for harvest — pending (1b-iii)
+nemeda-agent memory install [--interval M] | uninstall              # shipped; launchd / systemd user timer / Task Scheduler
 nemeda-agent memory index [--rebuild] [--json]                         # shipped; status, or --rebuild to force
 nemeda-agent memory sync [--dry-run]                                   # promote to central — pending (phase 3)
 nemeda-agent memory recap --period P [--scope project|central]              # pending (phase 3)
@@ -579,8 +586,7 @@ for both sides.
      line are shipped too. Still pending from the original design: the
      "read the raw transcript" fallback for a session that can no longer be
      resumed (a failed resume is recorded as a harvest error today, never
-     fabricated), `memory install`/`uninstall`'s local scheduler
-     (launchd/systemd/Task Scheduler), and the `memory-harvest` doctor check.
+     fabricated), and the `memory-harvest` doctor check. The scheduled trigger (`memory install`/`uninstall`: launchd, systemd user timer, Task Scheduler) is shipped.
    - **1b-iv, pending**: `import-airtable`, migrating existing Knowledge Log
      bases into journals.
 2. **Meeting integration** (with `meeting-capture-plan.md` phase 3): the

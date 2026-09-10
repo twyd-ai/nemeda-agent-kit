@@ -64,7 +64,8 @@ project instructions stay in `AGENTS.md`.
   every session to a local ledger, and `nemeda-agent memory harvest`
   (opt-in, `MEMORY_HARVEST=true`) resumes closed ones through their own
   host CLI to summarise sessions people forgot to log by hand, starting
-  automatically in the background when a new session opens. Queries
+  automatically in the background when a new session opens, or on a
+  schedule after `nemeda-agent memory install`. Queries
   go through a machine-local SQLite cache (never on the drive) that
   rebuilds itself whenever the journals change.
 - **A personal Slack bridge** (`nemeda-agent slack`): a Socket Mode runner that

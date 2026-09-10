@@ -584,9 +584,18 @@ over automatically. The same hook also tells the agent how many of your
 entries are pending review. `Stop` only records activity and never starts
 a harvest, because it fires after every turn.
 
-Still pending: a `memory install` scheduler for machines where sessions
-must be summarised the same day even if no new session is opened, and the
-doctor check; see memory-plan.md's phase 1b-iii.
+For a machine where sessions must be summarised the same day even if no
+new session is opened, `nemeda-agent memory install [--interval MINUTES]`
+schedules `memory harvest` every 30 minutes by default, and at login, on
+the platform's own user-level scheduler: a LaunchAgent on macOS, a systemd
+user timer on Linux, a Task Scheduler task on Windows. It activates the job
+itself, needs `MEMORY_HARVEST=true`, and writes to the same log. The job
+points at this plugin's install path, so run `memory install` again after
+updating the plugin; it rewrites only what changed. `--dry-run` shows the
+files and commands without touching anything, and
+`nemeda-agent memory uninstall` removes the job.
+
+Still pending: the doctor check; see memory-plan.md's phase 1b-iii.
 
 `airtable.knowledgeLog` still works but is deprecated in favor of this
 section (`nemeda-agent doctor` reports it); it will be removed once the
