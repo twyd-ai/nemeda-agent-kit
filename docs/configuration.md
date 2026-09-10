@@ -341,7 +341,7 @@ the airtable.com URL.
 Turns finished meeting recordings into transcripts filed on the shared drive.
 Optional; omit it and `nemeda-agent meeting` refuses to run. Design and
 roadmap in [meeting-capture-plan.md](meeting-capture-plan.md); this is what
-phases 1 to 3 ship.
+phases 1 to 4 ship.
 
 ```json
 "meetings": {
@@ -358,8 +358,9 @@ phases 1 to 3 ship.
   `transcript.srt`, `transcript.json` (normalised segments), and
   `meta.json` (source, checksum, duration, engine, model, language, host).
   Put it inside the `docs` Drive link so the whole team gets it.
-- `notes`: folder for the meeting notes generated from transcripts (later
-  phase; validated now so the taxonomy is stable).
+- `notes`: folder that receives one `<date>-<slug>.md` per meeting with
+  Summary, Decisions, Action items, and Open questions, written by your
+  local `claude` or `codex` right after the transcript (see Notes and memory).
 - `language`: language code or `auto`; defaults to
   `policies.conversationLanguage`.
 - `naming`: folder template; `{date}` is required, `{time}` and `{slug}`
@@ -368,14 +369,23 @@ phases 1 to 3 ship.
 - `inbox`: shared-drive folder where recorders drop finished recordings and
   transcribers pick them up (see Team roles). Optional; without it every
   machine records and transcribes on its own.
-- `knowledgeLog`, `recordings`: reserved for the notes phase; accepted and
-  validated, not yet acted on.
+- `memory` (default `true`): log one project-memory entry of type
+  `meeting` per transcribed recording when the workspace has a `memory`
+  section. `knowledgeLog` is accepted but deprecated and ignored.
+- `recordings`: what happens to the original recording once its transcript
+  exists. `{ "keep": "local" }` (default) leaves it; `{ "keep": "archive",
+  "path": "docs/recordings/archive" }` moves it there right after
+  transcription; `{ "keep": "delete", "afterDays": 30 }` deletes it that many
+  days later, only while its transcript folder still exists. Inbox copies
+  follow the same policy on the transcriber.
 
 Machine-local settings go in `.env.local`, never in the shared config.
 `nemeda-agent meeting setup` writes the first two after choosing for you:
 
 ```
 NEMEDA_MEETINGS_ROLE=full                      # recorder | transcriber | full (default)
+NEMEDA_MEETINGS_BACKEND=claude                 # claude | codex for the notes; default: first on PATH
+NEMEDA_MEETINGS_MODEL=sonnet                   # optional model alias passed to the backend
 NEMEDA_MEETINGS_ENGINE=apple-speech            # apple-speech | whisper-cpp; default: what doctor selects
 NEMEDA_WHISPER_MODEL=~/.nemeda/models/ggml-large-v3-turbo.bin   # whisper only; default: best ggml-*.bin in ~/.nemeda/models or ~/whisper-models
 NEMEDA_MEETINGS_WATCH=/Users/me/Movies        # default: OBS's recording folder from its active profile
@@ -406,6 +416,20 @@ A claim left by a machine that died is released the next time that machine
 runs; claims by other machines are listed by `meeting list` and never
 touched. Originals stay where the recorder put them.
 
+### Notes and memory
+
+After every transcript the kit asks your own Claude Code or Codex CLI, on
+this machine and read-only (the transcript goes on stdin, every tool is
+denied), for the notes: same language as the transcript, four fixed sections.
+The file starts with a header (date, recording, transcript path, generator)
+so it explains itself on the drive. Then it calls the memory module's
+`recordEntry` with type `meeting`, the Summary section as the summary, and
+the transcript, notes, recording, and engine as the source, so
+`nemeda-agent memory search` finds the meeting. Notes are best effort:
+without a CLI the transcript is still filed, the run reports `manual`, and
+the `meeting-notes` skill or `nemeda-agent meeting notes <folder>` produce
+them later (`--force` regenerates). `--no-notes` skips them for a run.
+
 ### Engines
 
 - **`whisper-cpp`** is the cross-platform base: `whisper-cli` from
@@ -430,7 +454,10 @@ machine should only record). `base` exists for `setup --model base`.
   (`.nemeda/state/meetings.json`), existing transcript folders are never
   overwritten (a second recording with the same name gets a numeric suffix),
   and the original recording is left where it was.
+- `nemeda-agent meeting notes <folder> [--force]`: notes and memory entry
+  for an existing transcript folder.
 - `nemeda-agent meeting doctor`: role, inbox and transcriber heartbeat,
+  notes backend, memory logging, retention policy,
   machine capability and estimate per hour of audio, engine selection and
   why, ffmpeg and model, recordings folder, transcripts/notes folders and
   whether they sit inside a Drive link, and the local and inbox backlogs. A

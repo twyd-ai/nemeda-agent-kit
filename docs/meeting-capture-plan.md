@@ -1,9 +1,11 @@
 # Meeting capture and transcription plan
 
-Status: phases 1 to 3 implemented (`nemeda-agent meeting list | process |
-doctor | setup`, whisper.cpp and apple-speech engines, SessionStart inbox
-hook, recorder/transcriber/full roles over a shared inbox with claims and
-heartbeats); phases 4 and 5 pending. Target release: 0.4.0. The shipped
+Status: phases 1 to 4 implemented (`nemeda-agent meeting list | process |
+notes | doctor | setup`, whisper.cpp and apple-speech engines, SessionStart
+inbox hook, recorder/transcriber/full roles over a shared inbox with claims
+and heartbeats, notes by the local agent, memory entries through
+`recordEntry` instead of the Airtable Knowledge Log, `recordings.keep`);
+phase 5 pending. Target release: 0.4.0. The shipped
 configuration is documented in `docs/configuration.md`.
 
 Goal: replace the manual loop *record the meeting with OBS, run whisper by

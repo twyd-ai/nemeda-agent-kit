@@ -37,6 +37,7 @@ import {
   writeSharedState,
   writeState
 } from "./meetings-core.mjs";
+import { archiveRecording, generateNotes, recordMeetingMemory, sweepDeletions } from "./meetings-notes.mjs";
 import { readWorkspaceContext, validateConfig } from "./workspace.mjs";
 
 export * from "./meetings-core.mjs";
@@ -74,6 +75,7 @@ export function resolveMeetings(start, options = {}) {
   const threads = Number.parseInt(environment.NEMEDA_MEETINGS_THREADS || "", 10) || Math.max(1, os.cpus().length);
   return {
     root: context.root,
+    projectName: context.config.project.name,
     config: meetings,
     role,
     inbox,
@@ -231,6 +233,15 @@ export function transcribeRecording(resolved, recording, { title, dryRun = false
   }
 }
 
+// What follows a filed transcript: notes by the local agent, one memory
+// entry, and the retention policy. Each step is best effort.
+function afterTranscript(resolved, result, recordingPath, { actions, dryRun, skipNotes }) {
+  const notes = skipNotes ? null : generateNotes(resolved, result.folder, result.meta, { actions, dryRun });
+  recordMeetingMemory(resolved, result.folder, result.meta, notes, { actions, dryRun });
+  const archived = archiveRecording(resolved, recordingPath, { actions, dryRun });
+  return { notes, archived };
+}
+
 function processedEntry(recording, resolved, result) {
   return {
     path: recording.path,
@@ -269,7 +280,7 @@ function handOffLocal(resolved, targets, state, actions, dryRun) {
 }
 
 // Transcriber side: claim, transcribe, release, record in the shared state.
-function drainInbox(resolved, actions, dryRun, title) {
+function drainInbox(resolved, actions, dryRun, title, skipNotes) {
   const processed = [];
   if (!existsSync(resolved.inbox)) {
     actions.push(action("inbox", "error", `Inbox folder is missing: ${path.relative(resolved.root, resolved.inbox)}/ (run \`nemeda-agent setup\` so the Drive link exists).`));
@@ -307,9 +318,19 @@ function drainInbox(resolved, actions, dryRun, title) {
         latest.processed.push({ ...processedEntry(recording, resolved, result), path: path.basename(recording.path) });
         writeSharedState(resolved.inbox, latest);
         processed.push(result);
+        // Release the claim before touching the file again (archive moves it).
+        releaseClaim(claimed);
+        claimed = null;
+        const { archived } = afterTranscript(resolved, result, recording.path, { actions, dryRun, skipNotes });
+        if (archived) {
+          const current = readSharedState(resolved.inbox);
+          const entry = current.processed.find((item) => item.path === path.basename(recording.path));
+          if (entry) entry.archivedTo = path.relative(resolved.root, archived);
+          writeSharedState(resolved.inbox, current);
+        }
       }
     } finally {
-      releaseClaim(claimed);
+      if (claimed) releaseClaim(claimed);
     }
   }
   return processed;
@@ -339,11 +360,17 @@ export function processRecordings(start, options = {}) {
     } else {
       const result = transcribeRecording(resolved, entry, { title: options.title, dryRun, actions });
       if (result && !result.planned) {
-        state.processed.push(processedEntry(entry, resolved, result));
+        const record = processedEntry(entry, resolved, result);
+        state.processed.push(record);
         writeState(resolved.root, state);
         processed.push(result);
+        const { archived } = afterTranscript(resolved, result, entry.path, { actions, dryRun, skipNotes: options.skipNotes });
+        if (archived) record.archivedTo = path.relative(resolved.root, archived);
+        writeState(resolved.root, state);
       }
     }
+    sweepDeletions(resolved, state, { actions, dryRun });
+    writeState(resolved.root, state);
     return { root: resolved.root, role: resolved.role, dryRun, actions, processed, handedOff };
   }
 
@@ -362,9 +389,13 @@ export function processRecordings(start, options = {}) {
       for (const recording of discovered.ready) {
         const result = transcribeRecording(resolved, recording, { title: options.title, dryRun, actions });
         if (!result || result.planned) continue;
-        state.processed.push(processedEntry(recording, resolved, result));
+        const record = processedEntry(recording, resolved, result);
+        state.processed.push(record);
         writeState(resolved.root, state);
         processed.push(result);
+        const { archived } = afterTranscript(resolved, result, recording.path, { actions, dryRun, skipNotes: options.skipNotes });
+        if (archived) record.archivedTo = path.relative(resolved.root, archived);
+        writeState(resolved.root, state);
       }
     }
   } else if (resolved.role === "full") {
@@ -376,8 +407,31 @@ export function processRecordings(start, options = {}) {
     if (!dryRun && !existsSync(resolved.transcriptsDirectory)) {
       actions.push(action("folder", "error", `Transcripts folder is missing: ${path.relative(resolved.root, resolved.transcriptsDirectory)}/ (run \`nemeda-agent setup\` so the Drive link exists).`));
     } else {
-      processed.push(...drainInbox(resolved, actions, dryRun, options.title));
+      processed.push(...drainInbox(resolved, actions, dryRun, options.title, options.skipNotes));
     }
   }
+  // Retention sweep: local recordings, then the inbox copies (names relative to the inbox).
+  if (sweepDeletions(resolved, state, { actions, dryRun }) && !dryRun) writeState(resolved.root, state);
+  if (transcribesInbox(resolved) && existsSync(resolved.inbox)) {
+    const shared = readSharedState(resolved.inbox);
+    if (sweepDeletions(resolved, shared, { actions, dryRun, resolvePath: (entry) => path.join(resolved.inbox, entry.path) }) && !dryRun) writeSharedState(resolved.inbox, shared);
+  }
   return { root: resolved.root, role: resolved.role, dryRun, actions, processed, handedOff };
+}
+
+// `nemeda-agent meeting notes FOLDER`: notes and memory for an existing
+// transcript, for retries and for transcripts made before notes existed.
+export function notesForTranscript(start, folder, options = {}) {
+  const resolved = resolveMeetings(start, options);
+  const transcriptFolder = path.resolve(resolved.root, expandHome(folder, resolved.environment));
+  const metaPath = path.join(transcriptFolder, "meta.json");
+  if (!existsSync(metaPath)) throw new Error(`Not a transcript folder (no meta.json): ${transcriptFolder}`);
+  const meta = JSON.parse(readFileSync(metaPath, "utf8"));
+  const actions = [];
+  if (!resolved.notesDirectory) {
+    actions.push(action("notes", "skipped", "meetings.notes is not configured; add it to .nemeda/agent-kit.json to write notes."));
+  }
+  const notes = resolved.notesDirectory ? generateNotes(resolved, transcriptFolder, meta, { actions, dryRun: Boolean(options.dryRun), force: Boolean(options.force) }) : null;
+  const memory = notes && !notes.kept ? recordMeetingMemory(resolved, transcriptFolder, meta, notes, { actions, dryRun: Boolean(options.dryRun) }) : null;
+  return { root: resolved.root, dryRun: Boolean(options.dryRun), actions, notes: notes?.notesPath ? path.relative(resolved.root, notes.notesPath) : null, memory: memory?.id || null };
 }

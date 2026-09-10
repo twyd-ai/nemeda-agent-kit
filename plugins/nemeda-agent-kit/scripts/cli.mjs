@@ -45,6 +45,9 @@ function parseArguments(argv) {
     else if (value === "--model") options.model = rest[++index];
     else if (value === "--obs") options.obs = true;
     else if (value === "--yes" || value === "-y") options.yes = true;
+    else if (value === "--no-notes") options.skipNotes = true;
+    else if (value === "--force") options.force = true;
+    else if (command === "meeting" && options.subcommand === "notes" && !options.folder && !value.startsWith("-")) options.folder = value;
     else if (command === "meeting" && options.subcommand === "process" && !options.file && !value.startsWith("-")) options.file = value;
     else if (command === "memory" && options.subcommand === "search" && !options.query && !value.startsWith("-")) options.query = value;
     else if (command === "memory" && options.subcommand === "review" && !options.reviewId && !value.startsWith("-")) options.reviewId = value;
@@ -75,7 +78,8 @@ Usage:
   nemeda-agent slack join <https://relay-url> [--as NAME] | leave | relay
   nemeda-agent slack server [NAME] [--forget NAME]
   nemeda-agent slack run [--server NAME]      # one runner per relay, side by side
-  nemeda-agent meeting process [FILE] [--title TITLE] [--engine NAME] [--dry-run] [--json]
+  nemeda-agent meeting process [FILE] [--title TITLE] [--engine NAME] [--no-notes] [--dry-run] [--json]
+  nemeda-agent meeting notes FOLDER [--force] [--dry-run] [--json]
   nemeda-agent meeting list [--json]
   nemeda-agent meeting doctor [--engine NAME] [--json]
   nemeda-agent meeting setup [--obs] [--model TIER] [--engine NAME] [--yes] [--dry-run] [--json]
@@ -122,6 +126,9 @@ Commands:
                        (OBS's recording folder, or NEMEDA_MEETINGS_WATCH), or
                        one FILE; files <date>-<slug>/ under meetings.transcripts
              list      show ready, in-progress, and already transcribed recordings
+             notes     write the notes (Summary, Decisions, Action items, Open
+                       questions) for an existing transcript folder with your local
+                       claude or codex, and log the meeting to the project memory
              doctor    machine capability, engine selection (apple-speech on
                        macOS 26 + Apple Silicon, whisper.cpp elsewhere), model,
                        ffmpeg, recordings folder, Drive folders, backlog
@@ -283,8 +290,15 @@ async function runMeeting(options) {
     return 0;
   }
   if (subcommand === "process") {
-    const report = processRecordings(cwd, { file: options.file, title: options.title, engine: options.engine, dryRun: Boolean(options.dryRun) });
+    const report = processRecordings(cwd, { file: options.file, title: options.title, engine: options.engine, skipNotes: Boolean(options.skipNotes), dryRun: Boolean(options.dryRun) });
     printReport(report, options, `Nemeda Agent Kit meeting process${report.dryRun ? " (dry run)" : ""} at ${report.root}`);
+    return report.actions.some((entry) => entry.status === "error") ? 1 : 0;
+  }
+  if (subcommand === "notes") {
+    if (!options.folder) throw new Error("meeting notes needs a transcript folder: nemeda-agent meeting notes docs/transcripts/<date>-<slug>");
+    const { notesForTranscript } = await import("./lib/meetings.mjs");
+    const report = notesForTranscript(cwd, options.folder, { force: Boolean(options.force), dryRun: Boolean(options.dryRun), engine: options.engine });
+    printReport(report, options, `Nemeda Agent Kit meeting notes${report.dryRun ? " (dry run)" : ""} at ${report.root}`);
     return report.actions.some((entry) => entry.status === "error") ? 1 : 0;
   }
   if (subcommand === "doctor") {
@@ -292,7 +306,7 @@ async function runMeeting(options) {
     const context = readWorkspaceContext(cwd);
     if (context.mode !== "configured") throw new Error("No .nemeda/agent-kit.json found; run `nemeda-agent init` first.");
     if (!context.config?.meetings) throw new Error("This workspace has no `meetings` section in .nemeda/agent-kit.json; add one to enable meeting capture.");
-    const checks = meetingDoctorChecks(context.root, context.config.meetings, context.config.drive, process.env, { explicitEngine: options.engine || null });
+    const checks = meetingDoctorChecks(context.root, context.config.meetings, context.config.drive, process.env, { explicitEngine: options.engine || null, memoryConfigured: Boolean(context.config.memory) });
     printReport({ checks }, options, `Nemeda Agent Kit meeting doctor at ${context.root}`);
     return checks.some((check) => check.status === "fail") ? 1 : 0;
   }
@@ -319,7 +333,7 @@ async function runMeeting(options) {
     printReport(report, options, dryRun ? "Planned:" : "Done:");
     return report.actions.some((entry) => entry.status === "error") ? 1 : 0;
   }
-  throw new Error(`Unknown meeting subcommand: ${subcommand}; use process, list, doctor, or setup.`);
+  throw new Error(`Unknown meeting subcommand: ${subcommand}; use process, list, notes, doctor, or setup.`);
 }
 
 async function readStdin() {

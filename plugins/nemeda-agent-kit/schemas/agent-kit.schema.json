@@ -310,10 +310,15 @@
           "default": "{date}-{slug}",
           "description": "Transcript folder name template; {date}, {time}, and {slug} are replaced."
         },
+        "memory": {
+          "type": "boolean",
+          "default": true,
+          "description": "Log one project-memory entry (type meeting) per transcribed meeting when the memory section exists."
+        },
         "knowledgeLog": {
           "type": "boolean",
           "default": false,
-          "description": "Create one Knowledge Log entry per transcribed meeting when the airtable section exists."
+          "description": "Deprecated and ignored: meetings are logged to the memory section instead."
         },
         "recordings": {
           "type": "object",
@@ -330,6 +335,11 @@
               "minimum": 1,
               "maximum": 365,
               "description": "Required with keep = delete: days to wait after the transcript exists."
+            },
+            "path": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Required with keep = archive: workspace-relative folder (normally on the shared drive) that receives the recordings."
             }
           }
         }

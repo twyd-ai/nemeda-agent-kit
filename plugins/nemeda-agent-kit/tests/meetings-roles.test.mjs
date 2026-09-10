@@ -82,6 +82,9 @@ fs.writeFileSync(base + ".json", JSON.stringify({ result: { language: "es" }, tr
   return {
     ...process.env,
     NEMEDA_MEETINGS_ENGINE: "whisper-cpp",
+    // No notes backend in these tests: the real claude/codex on PATH must never be called.
+    NEMEDA_CLAUDE_BIN: "/nonexistent/claude",
+    NEMEDA_CODEX_BIN: "/nonexistent/codex",
     NEMEDA_FFMPEG_BIN: ffmpeg,
     NEMEDA_WHISPER_BIN: whisper,
     NEMEDA_WHISPER_MODEL: model,

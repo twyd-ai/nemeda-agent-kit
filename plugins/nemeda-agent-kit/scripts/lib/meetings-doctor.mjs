@@ -5,6 +5,7 @@
 
 import { existsSync, statSync } from "node:fs";
 import path from "node:path";
+import { detectBackend } from "./backend.mjs";
 import { ENV_LOCAL_NAME, loadEnvLocal } from "./env.mjs";
 import {
   HEARTBEAT_STALE_HOURS,
@@ -174,6 +175,30 @@ export function meetingDoctorChecks(root, meetingsConfig, driveConfig, environme
     } else {
       checks.push({ status: "pass", code: "meetings-folders", message: `${relative}/ exists${driveConfig ? " on the shared drive" : ""}.` });
     }
+  }
+
+  // Notes, memory, retention.
+  if (meetingsConfig.notes) {
+    let detected;
+    try {
+      detected = detectBackend(resolved.environment);
+      checks.push(detected.backend && detected.installed
+        ? { status: "pass", code: "meetings-notes", message: `Notes will be written by ${detected.backend} (${detected.reason})${resolved.environment.NEMEDA_MEETINGS_MODEL ? `, model ${resolved.environment.NEMEDA_MEETINGS_MODEL}` : ""}.` }
+        : { status: "warn", code: "meetings-notes", message: `No local agent for notes (${detected.reason}); transcripts are still filed, notes need the meeting-notes skill or \`nemeda-agent meeting notes\`.` });
+    } catch (error) {
+      checks.push({ status: "fail", code: "meetings-notes", message: error instanceof Error ? error.message : String(error) });
+    }
+  }
+  checks.push(meetingsConfig.memory === false
+    ? { status: "pass", code: "meetings-memory", message: "Meetings are not logged to the project memory (meetings.memory is false)." }
+    : options.memoryConfigured
+      ? { status: "pass", code: "meetings-memory", message: "Every transcribed meeting is logged to the project memory." }
+      : { status: "warn", code: "meetings-memory", message: "No `memory` section: transcribed meetings are filed but not logged; add one (see docs/memory-plan.md)." });
+  const policy = meetingsConfig.recordings;
+  if (policy?.keep === "archive") {
+    checks.push({ status: existsSync(path.join(root, policy.path)) ? "pass" : "warn", code: "meetings-retention", message: `Recordings are archived to ${policy.path}/ after transcription${existsSync(path.join(root, policy.path)) ? "" : " (folder missing; it is created on first use)"}.` });
+  } else if (policy?.keep === "delete") {
+    checks.push({ status: "pass", code: "meetings-retention", message: `Recordings are deleted ${policy.afterDays} days after their transcript exists.` });
   }
 
   // Backlog.
