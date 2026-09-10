@@ -389,6 +389,32 @@
               "default": "reviewed"
             }
           }
+        },
+        "harvest": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Unattended-capture tuning for `nemeda-agent memory harvest`. Harvesting itself is opt-in per machine (MEMORY_HARVEST=true in .env.local); this section only tunes it.",
+          "properties": {
+            "idleMinutes": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1440,
+              "default": 30,
+              "description": "A session counts as closed once idle this long."
+            },
+            "maxSessionsPerRun": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 50,
+              "default": 5,
+              "description": "Upper bound on sessions resumed (and billed) per harvest run."
+            },
+            "hosts": {
+              "type": "array",
+              "items": { "enum": ["claude", "codex"] },
+              "description": "Restrict harvesting to these hosts; defaults to both."
+            }
+          }
         }
       }
     }

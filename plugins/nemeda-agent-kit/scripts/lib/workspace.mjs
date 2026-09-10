@@ -340,7 +340,7 @@ function validateMemory(memory, issues) {
     issues.push({ level: "error", code: "invalid-memory", message: "memory must be an object." });
     return;
   }
-  validateAllowedKeys(memory, ["project", "central"], "memory", issues);
+  validateAllowedKeys(memory, ["project", "central", "harvest"], "memory", issues);
   if (!isObject(memory.project)) {
     issues.push({ level: "error", code: "invalid-memory", message: "memory.project must be an object." });
   } else {
@@ -368,6 +368,25 @@ function validateMemory(memory, issues) {
       }
       if (memory.central.promote !== undefined && !MEMORY_PROMOTE_VALUES.includes(memory.central.promote)) {
         issues.push({ level: "error", code: "invalid-memory", message: `memory.central.promote must be one of: ${MEMORY_PROMOTE_VALUES.join(", ")}.` });
+      }
+    }
+  }
+  if (memory.harvest !== undefined) {
+    if (!isObject(memory.harvest)) {
+      issues.push({ level: "error", code: "invalid-memory", message: "memory.harvest must be an object." });
+    } else {
+      validateAllowedKeys(memory.harvest, ["idleMinutes", "maxSessionsPerRun", "hosts"], "memory.harvest", issues);
+      if (memory.harvest.idleMinutes !== undefined && (!Number.isInteger(memory.harvest.idleMinutes) || memory.harvest.idleMinutes < 1 || memory.harvest.idleMinutes > 1440)) {
+        issues.push({ level: "error", code: "invalid-memory", message: "memory.harvest.idleMinutes must be an integer between 1 and 1440." });
+      }
+      if (memory.harvest.maxSessionsPerRun !== undefined && (!Number.isInteger(memory.harvest.maxSessionsPerRun) || memory.harvest.maxSessionsPerRun < 1 || memory.harvest.maxSessionsPerRun > 50)) {
+        issues.push({ level: "error", code: "invalid-memory", message: "memory.harvest.maxSessionsPerRun must be an integer between 1 and 50." });
+      }
+      if (memory.harvest.hosts !== undefined) {
+        validateStringArray(memory.harvest.hosts, "memory.harvest.hosts", issues);
+        if (Array.isArray(memory.harvest.hosts) && memory.harvest.hosts.some((host) => !["claude", "codex"].includes(host))) {
+          issues.push({ level: "error", code: "invalid-memory", message: 'memory.harvest.hosts entries must be "claude" or "codex".' });
+        }
       }
     }
   }
