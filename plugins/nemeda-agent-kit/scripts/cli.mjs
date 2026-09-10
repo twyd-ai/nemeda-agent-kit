@@ -15,7 +15,7 @@ import {
 function parseArguments(argv) {
   const [command = "help", ...rest] = argv;
   const options = { profiles: [] };
-  if (["slack", "airtable", "cursor", "meeting"].includes(command) && rest[0] && !rest[0].startsWith("-")) options.subcommand = rest.shift();
+  if (["slack", "airtable", "cursor", "meeting", "memory"].includes(command) && rest[0] && !rest[0].startsWith("-")) options.subcommand = rest.shift();
   for (let index = 0; index < rest.length; index += 1) {
     const value = rest[index];
     if (value === "--json") options.json = true;
@@ -33,7 +33,13 @@ function parseArguments(argv) {
     else if (value === "--forget") options.forget = rest[++index];
     else if (value === "--title") options.title = rest[++index];
     else if (value === "--engine") options.engine = rest[++index];
+    else if (value === "--type") options.type = rest[++index];
+    else if (value === "--tags") options.tags = rest[++index].split(",").map((tag) => tag.trim()).filter(Boolean);
+    else if (value === "--author") options.author = rest[++index];
+    else if (value === "--since") options.since = rest[++index];
+    else if (value === "--pending") options.pending = true;
     else if (command === "meeting" && options.subcommand === "process" && !options.file && !value.startsWith("-")) options.file = value;
+    else if (command === "memory" && options.subcommand === "search" && !options.query && !value.startsWith("-")) options.query = value;
     else if (command === "slack" && ["ask", "join", "server"].includes(options.subcommand) && !options.question) options.question = value;
     else throw new Error(`Unknown argument: ${value}`);
   }
@@ -63,6 +69,9 @@ Usage:
   nemeda-agent slack run [--server NAME]      # one runner per relay, side by side
   nemeda-agent meeting process [FILE] [--title TITLE] [--engine NAME] [--dry-run] [--json]
   nemeda-agent meeting list [--json]
+  nemeda-agent memory add [--type TYPE] [--title TITLE] [--tags a,b] [--json]
+  nemeda-agent memory list [--pending] [--type TYPE] [--author EMAIL] [--since DATE] [--json]
+  nemeda-agent memory search "query" [--pending] [--type TYPE] [--json]
 
 Commands:
   init     Create missing .nemeda/agent-kit.json and AGENTS.md safely.
@@ -98,6 +107,13 @@ Commands:
                        (OBS's recording folder, or NEMEDA_MEETINGS_WATCH), or
                        one FILE; files <date>-<slug>/ under meetings.transcripts
              list      show ready, in-progress, and already transcribed recordings
+  memory   Read and write project memory (needs a \`memory\` section in
+           .nemeda/agent-kit.json; see docs/memory-plan.md).
+             add       append one entry; the summary is read from stdin (or,
+                       with --json, the whole entry as JSON on stdin), the
+                       author is always this machine's \`git config user.email\`
+             list      list entries, newest first
+             search    full-text search across every author's journal
 `;
 }
 
@@ -211,6 +227,98 @@ async function runMeeting(options) {
     return report.actions.some((entry) => entry.status === "error") ? 1 : 0;
   }
   throw new Error(`Unknown meeting subcommand: ${subcommand}; use process or list.`);
+}
+
+async function readStdin() {
+  if (process.stdin.isTTY) return "";
+  let input = "";
+  for await (const chunk of process.stdin) input += chunk;
+  return input;
+}
+
+function summarizeMemoryEntry(entry) {
+  return `[${entry.status}] ${entry.date} ${entry.type} — ${entry.title} (${entry.author}) ${entry.id}`;
+}
+
+async function runMemory(options) {
+  const subcommand = options.subcommand || "list";
+  const cwd = options.cwd || defaultWorkspaceDirectory();
+  const context = readWorkspaceContext(cwd);
+  if (context.mode !== "configured" || !context.config?.memory) {
+    throw new Error("No `memory` section in .nemeda/agent-kit.json; see docs/memory-plan.md.");
+  }
+  const memoryLib = await import("./lib/memory.mjs");
+  const memoryRoot = path.join(context.root, context.config.memory.project.path);
+
+  if (subcommand === "add") {
+    const stdin = (await readStdin()).trim();
+    let fields = {};
+    if (options.json) {
+      if (!stdin) throw new Error("memory add --json reads the entry as JSON on stdin.");
+      try {
+        fields = JSON.parse(stdin);
+      } catch (error) {
+        throw new Error(`memory add --json: stdin is not valid JSON (${error instanceof Error ? error.message : String(error)}).`);
+      }
+    } else if (stdin) {
+      fields.summary = stdin;
+    }
+    const author = memoryLib.resolveAuthorEmail(context.root);
+    if (!author) throw new Error("git config user.email is not set; the kit needs it to attribute this entry.");
+    const entry = memoryLib.createEntry({
+      project: context.config.project.id,
+      repository: context.config.repository?.id,
+      type: options.type || fields.type || "finding",
+      title: options.title || fields.title,
+      date: fields.date,
+      author,
+      tags: options.tags || fields.tags || [],
+      summary: fields.summary,
+      clientSummary: fields.clientSummary,
+      source: fields.source || { kind: "manual" }
+    });
+    const errors = memoryLib.validateEntry(entry);
+    if (errors.length) throw new Error(`Invalid memory entry: ${errors.join("; ")}`);
+    memoryLib.appendEntry(memoryRoot, entry);
+    if (options.json) {
+      print(entry, true);
+      return 0;
+    }
+    console.log(`Logged ${summarizeMemoryEntry(entry)}\n-> ${memoryLib.journalPath(memoryRoot, author)}`);
+    return 0;
+  }
+
+  const { entries: rawEntries } = memoryLib.readAllJournals(memoryRoot);
+  const entries = memoryLib.latestRevisions(rawEntries).sort((a, b) => (a.date < b.date ? 1 : -1));
+  const filters = { type: options.type, author: options.author, status: options.pending ? "pending" : undefined, since: options.since };
+
+  if (subcommand === "list") {
+    const filtered = memoryLib.filterEntries(entries, filters);
+    if (options.json) {
+      print(filtered, true);
+      return 0;
+    }
+    console.log(`Nemeda Agent Kit memory at ${memoryRoot} (${filtered.length} of ${entries.length} entries)`);
+    for (const entry of filtered) console.log(summarizeMemoryEntry(entry));
+    return 0;
+  }
+
+  if (subcommand === "search") {
+    if (!options.query) throw new Error('memory search needs a query: nemeda-agent memory search "..."');
+    const results = memoryLib.searchEntries(entries, options.query, filters);
+    if (options.json) {
+      print(results, true);
+      return 0;
+    }
+    console.log(`${results.length} result(s) for "${options.query}":`);
+    for (const entry of results) {
+      const preview = entry.summary.length > 200 ? `${entry.summary.slice(0, 200)}…` : entry.summary;
+      console.log(`${summarizeMemoryEntry(entry)}\n  ${preview}`);
+    }
+    return 0;
+  }
+
+  throw new Error(`Unknown memory subcommand: ${subcommand}; use add, list, or search.`);
 }
 
 async function runSlack(options) {
@@ -334,6 +442,12 @@ export function run(argv = process.argv.slice(2)) {
     }
     if (command === "meeting") {
       return runMeeting(options).catch((error) => {
+        console.error(`nemeda-agent: ${error instanceof Error ? error.message : String(error)}`);
+        return 2;
+      });
+    }
+    if (command === "memory") {
+      return runMemory(options).catch((error) => {
         console.error(`nemeda-agent: ${error instanceof Error ? error.message : String(error)}`);
         return 2;
       });
