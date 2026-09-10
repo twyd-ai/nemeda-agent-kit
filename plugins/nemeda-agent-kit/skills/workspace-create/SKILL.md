@@ -14,6 +14,8 @@ filing conventions. Everything below serves that.
 - Project name and short id (lowercase, hyphens).
 - Which code repositories exist or must be created (GitHub org/names), or none —
   a documentation/operations project is valid with no code repos.
+- Shared storage provider: Google Drive (default) or OneDrive/SharePoint —
+  ask if the team's other projects do not already make it obvious.
 - Shared drive name. Convention: use the project name, exactly.
 - Airtable workspace id (`wsp...`, from the airtable.com URL) if the project
   wants a plan base; skip otherwise.
@@ -22,26 +24,33 @@ filing conventions. Everything below serves that.
 ## 2. Preflight
 
 Run `nemeda-agent doctor` (or `node <plugin-root>/scripts/cli.mjs doctor`).
-If there is no Google Drive mount, give the platform instructions and stop
-until it is installed — `docs/drive-setup.md` has macOS, Windows, and Linux
-steps; the doctor error message carries the short version.
+If there is no mount for the chosen provider, give the platform instructions
+and stop until it is installed — `docs/drive-setup.md` has macOS, Windows,
+and Linux steps for both Google Drive and OneDrive; the doctor error message
+carries the short version.
 
 ## 3. Steps only a human can do (say so, plainly)
 
-1. **Create the shared drive** in Google Drive (New → Shared drive) with the
-   agreed name, and add the team as members. Creating shared drives needs a
-   Workspace account; the kit cannot do it through the filesystem.
+1. **Create the shared storage** with the agreed name, and add the team as
+   members:
+   - **Google Drive**: New → Shared drive (needs a Workspace account);
+   - **OneDrive/SharePoint**: create a Teams team or a SharePoint site named
+     after the project, and sync its default document library, or share a
+     personal OneDrive folder with the team ("Add shortcut to My files").
+   The kit cannot do this through the filesystem either way.
 2. **Grant access**: GitHub org membership for the code repos, and Airtable
    workspace access if using a plan base.
 
-Wait for confirmation that the drive exists and Drive for desktop shows it.
+Wait for confirmation that the shared drive exists and the desktop client
+shows it.
 
 ## 4. Assemble
 
 1. Create the workspace directory, `git init`, then run `nemeda-agent init`
    with the project id and name.
 2. Extend `.nemeda/agent-kit.json` with:
-   - `drive`: `sharedDrive` plus the canonical links — `docs`, `config`,
+   - `drive`: `provider` (omit for Google Drive; `"onedrive"` otherwise),
+     `sharedDrive`, plus the canonical links — `docs`, `config`,
      `.claude/skills` and `.agents/skills` → `skills`, and `.claude/commands`,
      `.agents/commands` and `.cursor/commands` → `commands` (Claude, Codex,
      and Cursor all load the same shared content);
@@ -66,9 +75,10 @@ Wait for confirmation that the drive exists and Drive for desktop shows it.
 
 ## 5. Hand-off message
 
-Tell the user what a teammate does on any OS: install Google Drive for desktop
-(see `docs/drive-setup.md`), accept the drive membership, clone the workspace
-repo, run `nemeda-agent setup`, then `nemeda-agent doctor`. Their AI then
-loads the same context, skills, and conventions as everyone else's.
+Tell the user what a teammate does on any OS: install the matching desktop
+client — Google Drive or OneDrive (see `docs/drive-setup.md`) — accept the
+shared drive membership, clone the workspace repo, run `nemeda-agent setup`,
+then `nemeda-agent doctor`. Their AI then loads the same context, skills, and
+conventions as everyone else's.
 
 Never put secrets in the config; `.env.local` stays personal and gitignored.

@@ -1,0 +1,36 @@
+{
+  "schemaVersion": 1,
+  "project": {
+    "id": "acme",
+    "name": "Acme"
+  },
+  "repository": {
+    "id": "acme",
+    "role": "backend",
+    "profiles": ["typescript"]
+  },
+  "drive": {
+    "provider": "onedrive",
+    "sharedDrive": "Acme",
+    "links": {
+      "docs": "docs",
+      "config": "config",
+      ".claude/skills": "skills",
+      ".claude/commands": "commands"
+    },
+    "scaffold": ["docs/meetings", "docs/transcripts", "docs/plans", "docs/analysis"]
+  },
+  "context": {
+    "instructions": ["AGENTS.md"],
+    "documents": []
+  },
+  "tools": {
+    "required": ["git", "github"],
+    "optional": ["onedrive"]
+  },
+  "policies": {
+    "protectSecrets": true,
+    "conversationLanguage": "es",
+    "artifactLanguage": "en"
+  }
+}

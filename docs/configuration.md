@@ -103,11 +103,32 @@ The Drive mount is detected language-agnostically (the "Shared drives" folder
 name is localized). Set `NEMEDA_DRIVE_ROOT=/path/to/shared-drive` to override
 detection (several Google accounts, Linux, tests).
 
-`provider` selects the shared-storage client the kit looks for. It is
-optional and defaults to `google`, the only provider today; the validator
-rejects any other value. Further providers (OneDrive / SharePoint, see
-[onedrive-plan.md](onedrive-plan.md)) plug into the same key without
-changing `links`, `scaffold`, or the workspace layout.
+`provider` selects the shared-storage client the kit looks for: `google`
+(default) or `onedrive`. The validator rejects any other value. Switching
+provider never changes `links`, `scaffold`, or the workspace layout — only
+how the shared folder is found on disk.
+
+```json
+{
+  "drive": {
+    "provider": "onedrive",
+    "sharedDrive": "Example-Workspace",
+    "links": { "docs": "docs", "config": "config" }
+  }
+}
+```
+
+`sharedDrive` is looked up in whatever plays the "shared drive" role for that
+provider: a Google shared drive, a personal OneDrive folder someone added a
+shortcut to, or a synced SharePoint document library. A synced library is
+named `<Site> - <Library>` and the library part is localized ("Documents",
+"Documentos", …), so `sharedDrive: "Acme"` also matches `Acme - Documentos`.
+See [drive-setup.md](drive-setup.md) for the per-platform mount locations
+and [onedrive-plan.md](onedrive-plan.md) for the full design.
+
+`nemeda-agent doctor` also warns when two candidates match equally well
+(`drive-ambiguous`, e.g. the same name reachable from two accounts) instead
+of silently picking one — set `NEMEDA_DRIVE_ROOT` to remove the ambiguity.
 
 ### Provisioning
 
@@ -141,10 +162,12 @@ is the project's docs taxonomy: setup creates it, doctor checks it, and the
 session context tells every AI to file documents into it rather than leaving
 files loose at the drive root.
 
-Creating the **shared drive itself** needs the Google Drive UI (Workspace
-account); everything inside it is automated. Platform notes for the desktop
-client are in [drive-setup.md](drive-setup.md) — the kit detects mounts on
-macOS, Windows (junctions, no admin needed), and Linux (rclone/gvfs).
+Creating the **shared drive itself** needs the provider's own UI — the Google
+Drive UI (Workspace account) or a Teams/SharePoint site synced to OneDrive;
+everything inside it is automated either way. Platform notes for both
+desktop clients are in [drive-setup.md](drive-setup.md) — the kit detects
+mounts on macOS, Windows (junctions, no admin needed), and Linux
+(rclone/gvfs for Google, rclone/onedriver for OneDrive).
 
 ## Cursor
 

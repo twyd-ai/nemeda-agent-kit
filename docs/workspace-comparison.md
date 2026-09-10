@@ -8,7 +8,8 @@ Reviewed on 12 August 2026 from the local Milence checkout and the private
 Both workspaces use the same composition pattern:
 
 - one coordinator repository around independent code repositories;
-- Google Drive folders mounted through machine-specific symlinks;
+- Google Drive folders mounted through machine-specific symlinks (now also
+  possible with OneDrive/SharePoint via `drive.provider`);
 - Claude skills and commands mounted from Drive;
 - project MCP configuration in `.mcp.json`;
 - local setup scripts for Airtable knowledge logging and PR synchronization;

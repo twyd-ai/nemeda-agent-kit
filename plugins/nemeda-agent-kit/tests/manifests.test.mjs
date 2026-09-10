@@ -148,10 +148,16 @@ test("dogfood and sanitized example configurations pass runtime validation", () 
   const configurations = [
     path.join(repositoryRoot, ".nemeda", "agent-kit.json"),
     path.join(repositoryRoot, "examples", "milence-agent-kit.json"),
-    path.join(repositoryRoot, "examples", "scharlab-agent-kit.json")
+    path.join(repositoryRoot, "examples", "scharlab-agent-kit.json"),
+    path.join(repositoryRoot, "examples", "onedrive-agent-kit.json")
   ];
 
   for (const configuration of configurations) {
     assert.deepEqual(validateConfig(readJson(configuration)), [], configuration);
   }
+});
+
+test("the OneDrive example actually declares the onedrive provider", () => {
+  const config = readJson(path.join(repositoryRoot, "examples", "onedrive-agent-kit.json"));
+  assert.equal(config.drive.provider, "onedrive");
 });

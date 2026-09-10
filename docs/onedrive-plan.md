@@ -175,7 +175,14 @@ All filesystem-based, no network, in `tests/provisioning.test.mjs`:
    fabricated with a normal file write, so its verification is deferred to
    phase 4 (manual, on a machine with an actual undownloaded file). Verified
    end-to-end against the real `OneDrive-Personal` mount on this machine.
-3. **Docs and skills**: the four documents, the create skill, the example.
+3. **Docs and skills** — done. `drive-setup.md` is now "Shared storage
+   setup" with parallel Google/OneDrive sections per platform, plus a Files
+   On-Demand/streaming-placeholder note pointing at the new doctor warning;
+   `configuration.md` documents `provider` and `drive-ambiguous`;
+   `workspace-create` branches step 1 and the hand-off message on provider;
+   README and `workspace-comparison.md` got the one-line wording updates;
+   `examples/onedrive-agent-kit.json` added and covered by the existing
+   example-validation test.
 4. **Manual verification** on a Mac with `OneDrive-Personal` mounted (a
    shared folder is enough) and, when available, one Windows machine with a
    synced SharePoint library. Record findings in this file.

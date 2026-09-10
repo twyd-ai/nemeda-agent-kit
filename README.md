@@ -20,8 +20,10 @@ project instructions stay in `AGENTS.md`.
 - A zero-dependency CLI: `nemeda-agent init`, `setup`, `context`, `doctor`, and
   `slack`.
 - **Shared-workspace assembly and provisioning** (`nemeda-agent setup`): the
-  Google Drive structure itself (folders created when missing, each carrying a
-  README with its filing conventions, plus a declared docs taxonomy), the
+  shared drive structure itself — Google Drive or OneDrive/SharePoint,
+  `drive.provider` in the config — (folders created when missing, each
+  carrying a README with its filing conventions, plus a declared docs
+  taxonomy), the
   workspace symlinks (`docs/`, `config/`, skills and commands for both Claude
   and Codex; directory junctions on Windows), declared code repository clones,
   an `.env.local` template, and the matching `.gitignore` entries — all
