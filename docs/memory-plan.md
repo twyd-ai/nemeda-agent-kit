@@ -1,7 +1,7 @@
 # Knowledge memory plan
 
-Status: project layer implemented (phases 1a–1b-iii, see "Phases"), central
-layer designed. Target release: 0.4.0 (project layer), 0.5.0 (central
+Status: project layer implemented (phases 1a–1b-iii, see "Phases"); central
+layer client implemented (phase 3a), `close`/`recap`/`--via psql` pending. Target release: 0.4.0 (project layer), 0.5.0 (central
 layer). Supersedes `airtable.knowledgeLog`. The central database and its
 service are designed in [central-memory-plan.md](central-memory-plan.md).
 
@@ -154,6 +154,18 @@ npm packages:
   variables, never string-built. This is the break-glass path when the
   service is down, and the way to backfill; it needs a personal writer role
   and `psql` on `PATH`.
+
+**Service endpoints the kit uses** (`scripts/lib/memory-central.mjs`;
+proposed to the service's owner, pending confirmation). The base URL is
+`mcpUrl` without its trailing `/mcp`; every call but `/health` carries
+`Authorization: Bearer <token>`:
+
+| Endpoint | Used by | Answer |
+|---|---|---|
+| `GET /health` | `memory doctor` | `{ service, version, contractVersion, embeddings: { status, pending } }`; the kit refuses a `contractVersion` major it does not know |
+| `GET /whoami` | `memory doctor` | `{ email, projects, canPromote }`; 401 when the token is missing or invalid |
+| `POST /promote` | `memory sync`, `memory close` | body `{ entries: [contract rows], digests: [contract rows] }` without `promoted_at`/`promoted_by`, at most 200 rows; answer `{ entries: { inserted, existing }, digests: { inserted, existing }, errors: [{ id, revision, code, message }] }`; per-row errors (`unknown-project`, `forbidden-project`, `invalid`) never abort the batch; 403 when the account may not promote |
+| `POST /mcp` | the stdio proxy, `memory search --central`, `memory doctor` | Streamable HTTP: `initialize` (keeping `Mcp-Session-Id` when assigned), `notifications/initialized`, `tools/call`; JSON or SSE answers |
 
 The tables below are the contract both transports rely on: the service
 queries them, and `--via psql` writes them directly.
@@ -368,7 +380,7 @@ for Codex, Cursor, and the CLI; Claude hosts use OAuth instead);
    the service's own tools (`memory_central_search`,
    `memory_central_digests`, `memory_central_projects`): Claude hosts reach
    them directly, and Codex and Cursor through the kit's stdio proxy (phase
-   3, not implemented yet). Agents search central first for what may have
+   3a: `mcp.json` starts the server with `--central-proxy`). Agents search central first for what may have
    been decided elsewhere, then the project journals.
    `workspace-context` tells the agent these exist and when to use them
    ("before proposing an architecture decision, search memory for prior
@@ -550,16 +562,16 @@ feature calling it — say so explicitly rather than changing it quietly.
 ```
 nemeda-agent memory add [--type T] [--title …] [--tags a,b] [--json]   # append one entry — shipped
 nemeda-agent memory list [--pending] [--type T] [--author E] [--since D]     # shipped
-nemeda-agent memory search QUERY [--central] [--json]                       # shipped (no --central yet; --central calls the service)
+nemeda-agent memory search QUERY [--central] [--json]                       # shipped; --central searches the service
 nemeda-agent memory review [ID] [--all] [--json]                            # shipped; ID completes an entry, no ID lists the inbox
 nemeda-agent memory harvest [--session ID] [--dry-run] [--json]        # shipped; no flag = every closed session
 nemeda-agent memory install [--interval M] | uninstall              # shipped; launchd / systemd user timer / Task Scheduler
 nemeda-agent memory index [--rebuild] [--json]                         # shipped; status, or --rebuild to force
-nemeda-agent memory sync [--dry-run] [--via service|psql]              # promote to central — pending (phase 3)
+nemeda-agent memory sync [--all] [--dry-run] [--via service|psql]      # shipped through the service; --via psql pending (3c)
 nemeda-agent memory close [--dry-run]                                  # final sync + closure digest — pending (phase 3)
 nemeda-agent memory recap --period P [--scope project|central]              # pending (phase 3)
 nemeda-agent memory import-airtable [--base app…] [--dry-run]               # pending (1b-iv)
-nemeda-agent memory doctor [--json]                                    # pending; today's checks live under `nemeda-agent doctor`
+nemeda-agent memory doctor [--json]                                    # shipped: memory rows plus the online central checks
 ```
 
 ## Doctor
@@ -571,7 +583,10 @@ nemeda-agent memory doctor [--json]                                    # pending
 | `memory-engine` | `node:sqlite`, `sqlite3` CLI, or in-memory fallback; which one |
 | `memory-index` | index fresh vs. journals; entry counts by status |
 | `memory-conflicts` | sync-client conflict copies in `journal/` (`*(1).jsonl`, `*-conflict*`) |
-| `memory-central` | service discovery document reachable; token present and accepted (reachable / unauthenticated / version); contract version compatible; `projectId` listed by `memory_central_projects`; TEI status and rows waiting for a vector |
+| `memory-central` | offline (`doctor`, `workspace_doctor`): `mcpUrl` valid and a token present, never shown. Online (`memory doctor`): `/health` reachable, `contractVersion` major known |
+| `memory-central-token` | online: `/whoami` accepts the token, may promote; warns when the file holding it is readable by other users |
+| `memory-central-project` | online: `projectId` listed by `memory_central_projects`; otherwise points at `scripts/register-projects.sh` |
+| `memory-central-embeddings` | online: embeddings not `ok` (text-only search) and rows waiting for a vector |
 | `memory-psql` | only when `urlVariable` is set: `psql` on `PATH`, version, connection works, `meta.schema_version` compatible |
 | `memory-grants` | only when `urlVariable` is set: connected role can `SELECT` the contract tables and `INSERT` on `entries`/`digests`; warns on `UPDATE`/`DELETE`/DDL rights |
 | `memory-sync` | unpromoted reviewed entries, last successful sync |
@@ -658,14 +673,26 @@ migration there, and a major change bumps `meta.schema_version`.
      bases into journals.
 2. **Meeting integration** (with `meeting-capture-plan.md` phase 3): the
    pipeline writes `meeting` entries; `meeting-summary.md` retired.
-3. **Central connection** (0.5.0): `memory.central.mcpUrl`/`tokenVariable`
-   in the validator and schema, the stdio proxy for `memory_central_*` in
-   Codex and Cursor, `memory sync` through `POST /promote` (with
-   `--via psql` for administrators), `memory close`, `memory recap`, the
-   `memory-central` doctor check (plus `memory-psql`/`memory-grants` for the
-   psql path), and the `memory-log` skill searching central first. Depends
-   on the service being deployed (central-memory-plan.md, steps 1–2).
-   Remove `airtable.knowledgeLog`.
+3. **Central connection** (0.5.0). Depends on the service being deployed
+   (central-memory-plan.md, steps 1–2) and the project being registered.
+   - **3a, done**: `memory.central.mcpUrl`/`tokenVariable` in the validator
+     and schema (`urlVariable` optional), the token lookup (environment,
+     `~/.nemeda/.env.local`, workspace `.env.local`), the service client
+     (`scripts/lib/memory-central.mjs`: `/health`, `/whoami`,
+     `POST /promote`, a Streamable HTTP MCP client), `memory sync` with its
+     acknowledgement file (`scripts/lib/memory-sync.mjs`), `memory search
+     --central`, `memory doctor` with the online checks, the offline
+     `memory-central` row in `doctor`, the read-only stdio proxy for
+     `memory_central_*` (`--central-proxy`, set in `mcp.json`), the
+     context line pointing agents at central search, and the `memory-log`
+     skill writing confirmed entries as `reviewed` so they are promotable.
+     All tested against a `node:http` stub of the service.
+   - **3b, pending**: `memory recap` and `memory close` (digest written by
+     the operator's own agent, like the harvester; promoted with
+     `kind = 'recap' | 'closure'`), and `memory sync` from `SessionStart`
+     with the 12 h throttle.
+   - **3c, pending**: `memory sync --via psql` with the `memory-psql` and
+     `memory-grants` doctor rows. Remove `airtable.knowledgeLog`.
 4. **RAG** (outside the kit): embeddings and hybrid search live in the
    database and the service from the start (central-memory-plan.md); the kit
    only surfaces the service's read-only tools through `workspace-context`

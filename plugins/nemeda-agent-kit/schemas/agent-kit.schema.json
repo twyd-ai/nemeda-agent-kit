@@ -376,13 +376,28 @@
         "central": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["urlVariable"],
-          "description": "Optional connection to a company-wide PostgreSQL database provisioned outside the kit.",
+          "anyOf": [
+            { "required": ["mcpUrl"] },
+            { "required": ["urlVariable"] }
+          ],
+          "description": "Optional connection to company-wide central memory: normally through the memory service (mcpUrl), or directly to its PostgreSQL database for administrators (urlVariable).",
           "properties": {
+            "mcpUrl": {
+              "type": "string",
+              "format": "uri",
+              "pattern": "^(https://|http://(localhost|127\\.0\\.0\\.1|\\[::1\\])([:/]|$))",
+              "description": "The memory service's MCP endpoint (shared, non-secret); its HTTP endpoints (/health, /whoami, /promote) live next to it. Plain http only for localhost."
+            },
+            "tokenVariable": {
+              "type": "string",
+              "pattern": "^[A-Z][A-Z0-9_]*$",
+              "default": "NEMEDA_MEMORY_TOKEN",
+              "description": "Name of the variable holding the personal service token, read from the environment or ~/.nemeda/.env.local; never the token itself."
+            },
             "urlVariable": {
               "type": "string",
               "pattern": "^[A-Z][A-Z0-9_]*$",
-              "description": "Name of the .env.local variable holding the personal connection string; never the value itself."
+              "description": "Administrators only (memory sync --via psql): name of the .env.local variable holding a personal connection string; never the value itself. Required only when mcpUrl is absent."
             },
             "schema": {
               "type": "string",

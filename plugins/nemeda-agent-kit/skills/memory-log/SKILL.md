@@ -76,15 +76,17 @@ For each confirmed entry, in chronological order (earliest segment first),
 pipe the entry as JSON to `nemeda-agent memory add --json`:
 
 ```bash
-echo '{"type":"ai-interaction","title":"Claude Code (Opus) — 2026-09-10","tags":["architecture"],"summary":"...","clientSummary":"..."}' \
+echo '{"type":"ai-interaction","status":"reviewed","title":"Claude Code (Opus) — 2026-09-10","tags":["architecture"],"summary":"...","clientSummary":"..."}' \
   | nemeda-agent memory add --json --cwd <repository root>
 ```
 
 The author and project come from the workspace automatically (`git config
 user.email`, `.nemeda/agent-kit.json`); never pass an id or a person lookup
-table. Each entry lands as `pending` in the confirming person's own journal —
-this skill's confirmation step is the review, so there is nothing left in the
-inbox for `nemeda-agent memory review` to do with it.
+table. Always pass `"status":"reviewed"`: this skill's confirmation step is
+the review, so the entry lands reviewed in the confirming person's own
+journal and nothing is left in the inbox for `nemeda-agent memory review`.
+Reviewed entries are what `nemeda-agent memory sync` promotes to central
+memory when the project has a `memory.central` section.
 
 Report the created entry ids (or the printed one-line summary) back to the
 user; do not silently succeed.

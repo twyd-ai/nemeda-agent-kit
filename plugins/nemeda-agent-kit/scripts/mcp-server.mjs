@@ -1,5 +1,7 @@
 #!/usr/bin/env node
+import { flagEnabled } from "./lib/env.mjs";
 import { listTranscripts } from "./lib/meetings-core.mjs";
+import { CENTRAL_PROXY_TOOLS, callCentralTool, centralSettings, resolveCentralToken } from "./lib/memory-central.mjs";
 import { queryEntries } from "./lib/memory-index.mjs";
 import {
   defaultWorkspaceDirectory,
@@ -9,6 +11,10 @@ import {
 } from "./lib/workspace.mjs";
 
 const SERVER_INFO = { name: "nemeda-agent-kit", version: "0.3.0" };
+// mcp.json (Codex, Cursor) starts this server with --central-proxy; Claude
+// hosts connect to the memory service directly, so .mcp.json does not, and
+// the central tools are never listed twice there.
+const CENTRAL_PROXY = process.argv.includes("--central-proxy") || flagEnabled("NEMEDA_MEMORY_CENTRAL_PROXY");
 
 const memoryFilterProperties = {
   type: { type: "string", enum: ["ai-interaction", "decision", "finding", "meeting"], description: "Restrict to one entry type." },
@@ -96,6 +102,74 @@ const tools = [
   }
 ];
 
+const cwdProperty = { type: "string", description: "Current repository or subdirectory (its memory.central configuration picks the service)." };
+
+// Read-only proxies for the memory service's own tools (docs/memory-plan.md,
+// phase 3). Arguments other than cwd are forwarded untouched and the
+// service's answer is returned as is. The service's write tool is never
+// proxied: promotion is `nemeda-agent memory sync` only.
+const centralTools = [
+  {
+    name: "memory_central_search",
+    description: "Search company-wide central memory — reviewed decisions, findings, and session summaries promoted from every project — through the memory service (semantic and full-text). Search here first when a decision may already have been made in another project, then this project's memory with memory_search.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        cwd: cwdProperty,
+        query: { type: "string", description: "What to look for, in natural language." },
+        projects: { type: "array", items: { type: "string" }, description: "Restrict to these central project ids." },
+        types: { type: "array", items: { type: "string", enum: ["ai-interaction", "decision", "finding", "meeting"] }, description: "Restrict to these entry types." },
+        since: { type: "string", description: "Only entries on or after this date (YYYY-MM-DD)." },
+        k: { type: "integer", minimum: 1, description: "How many results to return." }
+      },
+      required: ["query"],
+      additionalProperties: false
+    }
+  },
+  {
+    name: "memory_central_digests",
+    description: "Recaps and project closures from central memory, newest first.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        cwd: cwdProperty,
+        project: { type: "string", description: "Central project id." },
+        period: { type: "string", description: "Period label, e.g. 2026-Q3." }
+      },
+      additionalProperties: false
+    }
+  },
+  {
+    name: "memory_central_projects",
+    description: "Projects in central memory you may read, with their active or closed status and counts.",
+    inputSchema: { type: "object", properties: { cwd: cwdProperty }, additionalProperties: false }
+  },
+  {
+    name: "memory_central_whoami",
+    description: "Who the memory service thinks you are and whether you may promote (diagnostics for token problems).",
+    inputSchema: { type: "object", properties: { cwd: cwdProperty }, additionalProperties: false }
+  }
+];
+
+const listedTools = CENTRAL_PROXY ? [...tools, ...centralTools] : tools;
+
+async function proxyCentralTool(cwd, name, args) {
+  const context = readWorkspaceContext(cwd);
+  const settings = context.mode === "configured" ? centralSettings(context.config) : null;
+  if (!settings?.baseUrl) {
+    return textResult({ error: "No memory.central.mcpUrl in .nemeda/agent-kit.json for this repository; central memory is not configured here (see docs/memory-plan.md)." }, true);
+  }
+  const { token } = resolveCentralToken(context.root, settings);
+  if (!token) return textResult({ error: `No token for the memory service: set ${settings.tokenVariable} in ~/.nemeda/.env.local.` }, true);
+  const { cwd: _cwd, ...forwarded } = args;
+  try {
+    const result = await callCentralTool(settings, token, name, forwarded);
+    return { content: result.content || [], isError: Boolean(result.isError) };
+  } catch (error) {
+    return textResult({ error: error instanceof Error ? error.message : String(error) }, true);
+  }
+}
+
 // Shared by every memory_* tool: answers through the machine-local index
 // (scripts/lib/memory-index.mjs), which rebuilds itself from the journals
 // when they change and falls back to reading them directly if the index
@@ -155,6 +229,7 @@ function toolResult(name, args = {}) {
     const entry = entries.find((candidate) => candidate.id === args.id);
     return entry ? textResult(entry) : textResult({ error: `No memory entry with id ${args.id}.` }, true);
   }
+  if (CENTRAL_PROXY && CENTRAL_PROXY_TOOLS.includes(name)) return proxyCentralTool(cwd, name, args);
   return textResult({ error: `Unknown tool: ${name}` }, true);
 }
 
@@ -182,11 +257,17 @@ function handle(request) {
     return;
   }
   if (method === "tools/list") {
-    send({ jsonrpc: "2.0", id, result: { tools } });
+    send({ jsonrpc: "2.0", id, result: { tools: listedTools } });
     return;
   }
   if (method === "tools/call") {
-    send({ jsonrpc: "2.0", id, result: toolResult(params.name, params.arguments || {}) });
+    // The central proxies answer asynchronously; local tools stay synchronous.
+    Promise.resolve()
+      .then(() => toolResult(params.name, params.arguments || {}))
+      .then(
+        (result) => send({ jsonrpc: "2.0", id, result }),
+        (error) => send({ jsonrpc: "2.0", id, result: textResult({ error: error instanceof Error ? error.message : String(error) }, true) })
+      );
     return;
   }
   if (method === "resources/list") {

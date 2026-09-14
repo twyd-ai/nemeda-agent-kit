@@ -50,6 +50,8 @@ function parseArguments(argv) {
     else if (value === "--interval") options.interval = Number(rest[++index]);
     else if (value === "--once") options.once = true;
     else if (value === "--force") options.force = true;
+    else if (value === "--via") options.via = rest[++index];
+    else if (value === "--central") options.central = true;
     else if (command === "meeting" && options.subcommand === "notes" && !options.folder && !value.startsWith("-")) options.folder = value;
     else if (command === "meeting" && options.subcommand === "process" && !options.file && !value.startsWith("-")) options.file = value;
     else if (command === "memory" && options.subcommand === "search" && !options.query && !value.startsWith("-")) options.query = value;
@@ -90,12 +92,14 @@ Usage:
   nemeda-agent meeting setup [--obs] [--model TIER] [--engine NAME] [--yes] [--dry-run] [--json]
   nemeda-agent memory add [--type TYPE] [--title TITLE] [--tags a,b] [--json]
   nemeda-agent memory list [--pending] [--type TYPE] [--author EMAIL] [--since DATE] [--json]
-  nemeda-agent memory search "query" [--pending] [--type TYPE] [--json]
+  nemeda-agent memory search "query" [--central] [--pending] [--type TYPE] [--json]
   nemeda-agent memory review [ID] [--all] [--json]
   nemeda-agent memory harvest [--session ID] [--dry-run] [--json]
   nemeda-agent memory index [--rebuild] [--json]
   nemeda-agent memory install [--interval MINUTES] [--dry-run] [--json]
   nemeda-agent memory uninstall [--dry-run] [--json]
+  nemeda-agent memory sync [--all] [--dry-run] [--json]
+  nemeda-agent memory doctor [--json]
 
 Commands:
   init     Create missing .nemeda/agent-kit.json and AGENTS.md safely.
@@ -153,7 +157,9 @@ Commands:
                        with --json, the whole entry as JSON on stdin), the
                        author is always this machine's \`git config user.email\`
              list      list entries, newest first
-             search    full-text search across every author's journal
+             search    full-text search across every author's journal;
+                       --central searches central memory through the
+                       memory service instead
              review    no ID: list your own pending entries (--all for
                        everyone's, browsing only); with ID: complete one of
                        your own pending entries, optionally with changes as
@@ -177,6 +183,15 @@ Commands:
                        Needs MEMORY_HARVEST=true. Re-run it after updating
                        the plugin so the job follows the new path.
              uninstall remove this workspace's scheduled harvest
+             sync      promote your latest reviewed entries to central
+                       memory through the memory service (POST /promote);
+                       --all includes every author's, --dry-run only lists
+                       them. Idempotent. Needs memory.central.mcpUrl and
+                       your token (memory.central.tokenVariable, default
+                       NEMEDA_MEMORY_TOKEN) in ~/.nemeda/.env.local
+             doctor    the memory checks, plus the online central ones:
+                       service reachable, contract version, token accepted,
+                       project registered, entries waiting for sync
 `;
 }
 
@@ -414,6 +429,9 @@ async function runMemory(options) {
       tags: options.tags || fields.tags || [],
       summary: fields.summary,
       clientSummary: fields.clientSummary,
+      // "reviewed" when a person confirmed the entry before it was written
+      // (the memory-log skill); validateEntry rejects anything else invalid.
+      status: fields.status,
       source: fields.source || { kind: "manual" }
     });
     const errors = memoryLib.validateEntry(entry);
@@ -428,6 +446,24 @@ async function runMemory(options) {
   }
 
   const filters = { type: options.type, author: options.author, status: options.pending ? "pending" : undefined, since: options.since };
+
+  if (subcommand === "search" && options.central) {
+    if (!options.query) throw new Error('memory search needs a query: nemeda-agent memory search "..." --central');
+    const central = await import("./lib/memory-central.mjs");
+    const settings = central.centralSettings(context.config);
+    if (!settings) throw new Error("No memory.central section in .nemeda/agent-kit.json; see docs/memory-plan.md, \"Configuration\".");
+    const token = central.requireCentralToken(context.root, settings);
+    const result = await central.callCentralTool(settings, token, "memory_central_search", {
+      query: options.query,
+      ...(options.type ? { types: [options.type] } : {}),
+      ...(options.since ? { since: options.since } : {})
+    });
+    const parsed = central.toolResultJson(result);
+    const text = (result.content || []).filter((item) => item.type === "text").map((item) => item.text).join("\n");
+    if (result.isError) throw new Error(`memory_central_search: ${parsed?.error || text || "failed"}`);
+    print(options.json ? (parsed ?? result.content) : text || "No results.", options.json);
+    return 0;
+  }
 
   if (subcommand === "list" || subcommand === "search") {
     if (subcommand === "search" && !options.query) throw new Error('memory search needs a query: nemeda-agent memory search "..."');
@@ -480,6 +516,57 @@ async function runMemory(options) {
       : uninstallHarvestScheduler(context.root, context.config, { dryRun: Boolean(options.dryRun) });
     printReport(report, options, `Nemeda Agent Kit memory ${subcommand}${report.dryRun ? " (dry run)" : ""} — ${report.platform}, job ${report.identity.name}`);
     return report.actions.some((entry) => entry.status === "error") ? 1 : 0;
+  }
+
+  if (subcommand === "sync") {
+    if (options.via && options.via !== "service") {
+      throw new Error(options.via === "psql"
+        ? "memory sync --via psql (direct database access, administrators only) is not implemented yet; the memory service is the default transport."
+        : `Unknown --via ${options.via}; use service (default) or psql.`);
+    }
+    const { describeSyncError, syncToCentral } = await import("./lib/memory-sync.mjs");
+    const report = await syncToCentral(context.root, context.config, { dryRun: Boolean(options.dryRun), all: Boolean(options.all) });
+    if (options.json) {
+      print(report, true);
+      return report.errors.length ? 1 : 0;
+    }
+    if (report.candidates.length === 0) {
+      console.log(`Nothing to promote to ${report.projectId} (${report.scope}, policy "${report.promote}").`);
+      return 0;
+    }
+    if (report.dryRun) {
+      console.log(`Would promote ${report.candidates.length} entr${report.candidates.length === 1 ? "y" : "ies"} to ${report.projectId} via ${report.endpoint}:`);
+      for (const candidate of report.candidates) console.log(`  ${candidate.id} r${candidate.revision} ${candidate.title} (${candidate.author})`);
+      return 0;
+    }
+    console.log(`Promoted to ${report.projectId}: ${report.inserted.length} new, ${report.existing.length} already there${report.errors.length ? `, ${report.errors.length} refused` : ""}.`);
+    for (const error of report.errors) console.log(`  refused ${describeSyncError(error, report.projectId)}`);
+    return report.errors.length ? 1 : 0;
+  }
+
+  if (subcommand === "doctor") {
+    const central = await import("./lib/memory-central.mjs");
+    let checks = workspaceDoctor(context.root).checks.filter((check) => check.code.startsWith("memory-") || check.code === "invalid-memory" || check.code === "deprecated-knowledge-log");
+    if (context.config.memory.central) {
+      // The online rows supersede the offline memory-central row.
+      checks = [...checks.filter((check) => check.code !== "memory-central"), ...(await central.centralDoctorChecks(context.root, context.config))];
+      const settings = central.centralSettings(context.config);
+      const { promotableEntries, readSyncState } = await import("./lib/memory-sync.mjs");
+      const state = readSyncState(context.root);
+      const waiting = promotableEntries(memoryLib.readAllJournals(memoryRoot).entries, { promote: settings.promote, author: memoryLib.resolveAuthorEmail(context.root) || undefined, state }).length;
+      checks.push({
+        status: state.lastError ? "warn" : "pass",
+        code: "memory-sync",
+        message: `${waiting} of your entries waiting for \`memory sync\`; last successful batch: ${state.lastSyncAt || "never"}${state.lastError ? `; last error: ${state.lastError}` : ""}.`
+      });
+    }
+    if (options.json) {
+      print({ root: context.root, checks }, true);
+    } else {
+      console.log(`Nemeda Agent Kit memory doctor at ${context.root}`);
+      for (const check of checks) console.log(`[${check.status.toUpperCase()}] ${check.code}: ${check.message}`);
+    }
+    return checks.some((check) => check.status === "fail") ? 1 : 0;
   }
 
   // Review writes a revision, so it reads the journals — the source of
@@ -577,7 +664,7 @@ async function runMemory(options) {
     return results.some((result) => !result.ok) ? 1 : 0;
   }
 
-  throw new Error(`Unknown memory subcommand: ${subcommand}; use add, list, search, review, harvest, index, install, or uninstall.`);
+  throw new Error(`Unknown memory subcommand: ${subcommand}; use add, list, search, review, harvest, index, install, uninstall, sync, or doctor.`);
 }
 
 async function runSlack(options) {

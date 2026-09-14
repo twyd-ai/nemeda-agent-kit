@@ -16,6 +16,7 @@ import { fileURLToPath } from "node:url";
 import { DRIVE_PROVIDERS, driveProvider, planDriveLinks } from "./drive.mjs";
 import { ENV_LOCAL_NAME, loadEnvLocal } from "./env.mjs";
 import { meetingDoctorChecks } from "./meetings-doctor.mjs";
+import { centralOfflineChecks, serviceUrlProblem } from "./memory-central.mjs";
 
 export const CONFIG_RELATIVE_PATH = path.join(".nemeda", "agent-kit.json");
 export const CONFIG_SCHEMA_VERSION = 1;
@@ -367,8 +368,18 @@ function validateMemory(memory, issues) {
     if (!isObject(memory.central)) {
       issues.push({ level: "error", code: "invalid-memory", message: "memory.central must be an object." });
     } else {
-      validateAllowedKeys(memory.central, ["urlVariable", "schema", "projectId", "promote"], "memory.central", issues);
-      if (typeof memory.central.urlVariable !== "string" || !ENV_VARIABLE_NAME_PATTERN.test(memory.central.urlVariable)) {
+      validateAllowedKeys(memory.central, ["mcpUrl", "tokenVariable", "urlVariable", "schema", "projectId", "promote"], "memory.central", issues);
+      if (memory.central.mcpUrl === undefined && memory.central.urlVariable === undefined) {
+        issues.push({ level: "error", code: "invalid-memory", message: "memory.central needs mcpUrl (the memory service, the normal path) or urlVariable (direct database access, administrators only)." });
+      }
+      if (memory.central.mcpUrl !== undefined) {
+        const problem = serviceUrlProblem(memory.central.mcpUrl);
+        if (problem) issues.push({ level: "error", code: "invalid-memory", message: `memory.central.mcpUrl ${problem}.` });
+      }
+      if (memory.central.tokenVariable !== undefined && (typeof memory.central.tokenVariable !== "string" || !ENV_VARIABLE_NAME_PATTERN.test(memory.central.tokenVariable))) {
+        issues.push({ level: "error", code: "invalid-memory", message: "memory.central.tokenVariable must be an environment variable name (e.g. NEMEDA_MEMORY_TOKEN), not the token itself." });
+      }
+      if (memory.central.urlVariable !== undefined && (typeof memory.central.urlVariable !== "string" || !ENV_VARIABLE_NAME_PATTERN.test(memory.central.urlVariable))) {
         issues.push({ level: "error", code: "invalid-memory", message: "memory.central.urlVariable must be an environment variable name (e.g. NEMEDA_MEMORY_DB_URL), not the connection string itself." });
       }
       for (const field of ["schema", "projectId"]) {
@@ -677,6 +688,7 @@ export function workspaceDoctor(start = defaultWorkspaceDirectory()) {
     if (context.config.workspace?.repositories) repositoryDoctorChecks(context.root, context.config.workspace.repositories, checks);
     if (context.config.airtable) airtableDoctorChecks(context.root, context.config.airtable, checks);
     if (context.config.memory) memoryDoctorChecks(context.root, context.config.memory, checks);
+    if (context.config.memory?.central) checks.push(...centralOfflineChecks(context.root, context.config));
     if (context.config.meetings) checks.push(...meetingDoctorChecks(context.root, context.config.meetings, context.config.drive, process.env, { memoryConfigured: Boolean(context.config.memory), projectId: context.config.project.id }));
   }
   return { root: context.root, mode: context.mode, checks };
@@ -1029,6 +1041,7 @@ export function formatContextForHook(context) {
   }
   if (context.config.memory) {
     lines.push(`Project memory: session summaries, decisions, and findings live in ${context.config.memory.project.path}/, one journal per author. Search prior work with \`nemeda-agent memory search "<query>"\` before proposing something that may already have been decided or found; log new entries with \`nemeda-agent memory add\`.`);
+    if (context.config.memory.central?.mcpUrl) lines.push("Central memory: reviewed entries promoted from every project are searchable with the `memory_central_search` MCP tool (the memory service connector in Claude; this kit's MCP server in Codex and Cursor). Search it first when a decision may already have been made in another project, then this project's memory. `nemeda-agent memory sync` promotes your reviewed entries.");
   }
   if (context.config.airtable?.tasks) {
     lines.push(`Airtable tasks: base ${context.config.airtable.baseId}, table ${context.config.airtable.tasks.tableId}.`);

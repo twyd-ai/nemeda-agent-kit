@@ -512,10 +512,8 @@ to run. Full design, storage rationale, and the central-database layer in
   for a one-person project.
 - `project.tags`: suggested tags shown by the reviewed-logging flow; free
   text, never enforced.
-- `central` (optional): connects to a company-wide PostgreSQL database
-  provisioned entirely outside the kit — see memory-plan.md's contract. Not
-  implemented yet in the CLI; the config shape is validated ahead of that
-  work landing.
+- `central` (optional): company-wide central memory, reached through the
+  memory service — see "Central memory" below.
 
 `nemeda-agent memory add` appends one entry (`--type`, `--title`, `--tags`,
 the prose summary on stdin, or the whole entry as JSON with `--json`),
@@ -539,7 +537,7 @@ working during the migration window.
 The kit's MCP server exposes three read-only tools backed by the same
 journals: `memory_search` (full-text, with the same `type`/`author`/
 `status`/`since` filters as the CLI), `memory_recent`, and `memory_get` by
-id. No `central` support yet — see memory-plan.md's phase 1b.
+id. Central memory has its own tools; see "Central memory" below.
 
 ### Query index
 
@@ -607,6 +605,63 @@ files and commands without touching anything, and
 `nemeda-agent memory uninstall` removes the job.
 
 Still pending: the doctor check; see memory-plan.md's phase 1b-iii.
+
+### Central memory (`memory.central`)
+
+Reviewed entries from every project, promoted to a company-wide database
+and served by the memory service (`nemeda-memory-service`; design in
+[central-memory-plan.md](central-memory-plan.md)). No laptop connects to the
+database: people authenticate to the service with a personal token.
+
+```json
+"memory": {
+  "project": { "path": ".nemeda/memory" },
+  "central": {
+    "mcpUrl": "https://memory.example.ts.net/mcp",
+    "tokenVariable": "NEMEDA_MEMORY_TOKEN",
+    "projectId": "acme",
+    "promote": "reviewed"
+  }
+}
+```
+
+- `mcpUrl` (required unless `urlVariable` is set): the service's MCP
+  endpoint; `https://` only (plain `http://` is accepted for localhost).
+  Shared and non-secret, so it belongs in the committed config.
+- `tokenVariable`: the *name* of the variable holding your personal token,
+  default `NEMEDA_MEMORY_TOKEN`. Put the token in `~/.nemeda/.env.local` (it
+  is per person, not per project; `chmod 600` the file); the process
+  environment and the workspace `.env.local` also work. Never commit it.
+- `projectId`: the central project this workspace promotes into; defaults
+  to `project.id` and must be registered in the service (an administrator
+  runs `scripts/register-projects.sh` there).
+- `promote`: `reviewed` (default) sends only reviewed entries; `all` sends
+  pending ones too.
+- `urlVariable`, `schema`: direct database access for administrators
+  (`memory sync --via psql`, not implemented yet).
+
+`nemeda-agent memory sync` sends your latest reviewed revisions to the
+service (`POST /promote`); `--all` includes every author's, `--dry-run` only
+lists them. It is idempotent — the service ignores rows it already has — and
+remembers what went through in `.nemeda/state/memory-sync.json`; a row the
+service refuses (for example, an unregistered project) is retried by the
+next sync. `nemeda-agent memory search "query" --central` searches central
+memory from the terminal.
+
+In agent sessions, Claude Desktop and Claude Code connect to the service
+directly as an MCP connector (Entra sign-in). Codex and Cursor get the same
+read-only tools — `memory_central_search`, `memory_central_digests`,
+`memory_central_projects`, `memory_central_whoami` — through this kit's MCP
+server, which forwards them with your token when it is started with
+`--central-proxy` (the plugin's `mcp.json` does this) or with
+`NEMEDA_MEMORY_CENTRAL_PROXY=true`. Writing to central memory is only ever
+`memory sync`, never an agent tool.
+
+`nemeda-agent doctor` checks the configuration and that a token is present,
+without touching the network; `nemeda-agent memory doctor` also checks that
+the service is reachable, speaks a contract version this kit knows, accepts
+your token, and lists this project, and how many of your entries are
+waiting for `memory sync`.
 
 `airtable.knowledgeLog` still works but is deprecated in favor of this
 section (`nemeda-agent doctor` reports it); it will be removed once the
