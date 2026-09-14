@@ -1,7 +1,9 @@
 # Knowledge memory plan
 
-Status: design, not implemented. Target release: 0.4.0 (project layer),
-0.5.0 (central layer). Supersedes `airtable.knowledgeLog`.
+Status: project layer implemented (phases 1a–1b-iii, see "Phases"), central
+layer designed. Target release: 0.4.0 (project layer), 0.5.0 (central
+layer). Supersedes `airtable.knowledgeLog`. The central database and its
+service are designed in [central-memory-plan.md](central-memory-plan.md).
 
 Goal: replace the Airtable Knowledge Log with a memory layer the kit owns end
 to end, usable in environments where Airtable does not exist, and split it in
@@ -12,10 +14,13 @@ two levels:
   the project's shared drive, queryable from every agent session.
 - **Central memory** — the company-wide layer: reviewed entries promoted from
   every project plus periodic recaps, stored in a PostgreSQL database that is
-  **provisioned and operated outside the kit**. The kit only connects to it:
-  it never runs DDL, migrations, embeddings, or a service. This document fixes
+  **provisioned and operated outside the kit** (the `nemeda-memory-service`
+  repository: migrations, embeddings, and an authenticated MCP/HTTP service).
+  The kit only connects to it, normally through that service: it never runs
+  DDL, migrations, embeddings, or a service of its own. This document fixes
   the contract (tables, columns, grants, config) that the external
-  provisioning must satisfy; the SQL that creates it lives elsewhere.
+  provisioning must satisfy; the SQL that creates it lives in the service
+  repository.
 
 Airtable task sync (`airtable.tasks`, the PR reconciler) is a separate concern
 and is *not* touched by this plan; see "Open questions".
@@ -117,23 +122,41 @@ and works identically on Google Drive and OneDrive (`onedrive-plan.md`).
 
 ### Central memory: an existing PostgreSQL database the kit connects to
 
-The central database is created and maintained by a separate provisioning
-file (another session, another repository or `deploy/` folder). The kit's
+The central database is created and maintained by the
+`nemeda-memory-service` repository (versioned migrations, an administrator
+bootstrap, a contract test), and served by that repository's service; see
+[central-memory-plan.md](central-memory-plan.md). The kit's
 responsibilities are limited to:
 
-- **connecting** with a connection string from `.env.local`;
-- **reading** entries and digests for `memory_search` / `memory_recent`;
-- **writing** promoted entries, idempotently, through `memory sync`;
-- **checking** in `doctor` that the database matches the contract below.
+- **connecting** to the service with a personal token;
+- **reading** central entries and digests (`memory_central_search`,
+  `memory_central_digests`) next to the project's own `memory_*` tools;
+- **writing** promoted entries and digests, idempotently, through
+  `memory sync` and `memory close`;
+- **checking** in `doctor` that the service is reachable and speaks a
+  contract version the kit knows.
 
-**How it connects, with zero dependencies.** The kit shells out to the `psql`
-CLI (`child_process`, exactly like `gh`, `ffmpeg`, or `whisper-cli`): `psql
-"$NEMEDA_MEMORY_DB_URL" -At -F $'\x1f' -v ON_ERROR_STOP=1 -c "..."` with
-parameters passed through `-v` variables, never string-built. `doctor` checks
-`psql` on `PATH` (`brew install libpq`, `apt install postgresql-client`, the
-Windows installer) and reports the server version. Hosts that already have a
-PostgreSQL MCP connector can query the same tables ad hoc; the kit does not
-depend on it.
+**How it connects, with zero dependencies.** Two transports, both without
+npm packages:
+
+- **The service (default).** `memory.central.mcpUrl` points at the service.
+  Claude Desktop and Claude Code connect to its MCP endpoint directly
+  (Entra OAuth). For Codex and Cursor, the kit's stdio MCP server proxies
+  `memory_central_search` and `memory_central_digests` with the personal
+  token through `fetch`. `memory sync` and `memory close` call
+  `POST /promote` with the same token; `promoted_by` comes from the
+  validated token, never from the payload. No laptop needs database
+  credentials.
+- **`psql`, for administrators only** (`memory sync --via psql`). The kit
+  shells out to the `psql` CLI (`child_process`, exactly like `gh`,
+  `ffmpeg`, or `whisper-cli`): `psql "$NEMEDA_MEMORY_DB_URL" -At -F $'\x1f'
+  -v ON_ERROR_STOP=1 -c "..."` with parameters passed through `-v`
+  variables, never string-built. This is the break-glass path when the
+  service is down, and the way to backfill; it needs a personal writer role
+  and `psql` on `PATH`.
+
+The tables below are the contract both transports rely on: the service
+queries them, and `--via psql` writes them directly.
 
 **Contract the external provisioning must satisfy.** Everything lives in one
 schema so the database can be shared with other tools:
@@ -191,8 +214,9 @@ A view `entries_current` (latest revision per `id`) is recommended so the
 search queries stay simple; the kit falls back to a `DISTINCT ON` query when
 the view is missing.
 
-`digests` — periodic recaps, written by `memory recap` and read by
-`memory_digests`:
+`digests` — periodic recaps written by `memory recap`, plus the append-only
+project lifecycle events written by `memory close` (read through
+`memory_central_digests`):
 
 | column | type | notes |
 |---|---|---|
@@ -202,25 +226,38 @@ the view is missing.
 | `period` | text not null | `2026-Q3`, `2026-09`, free but sortable |
 | `body` | text not null | Markdown |
 | `generated_by` | text not null | email or `service` |
+| `kind` | text not null default `'recap'` | check in (`recap`, `closure`, `reopen`); `closure`/`reopen` only with `scope = 'project'` |
 | `created_at` | timestamptz not null default now() | |
 
-Anything else the database holds — embeddings, pgvector, RAG tables,
-scheduled jobs — is invisible to the kit and must not be required by it.
-The kit only ever touches the four tables above and the optional view.
+Closing a project never updates `projects`: it inserts a `closure` digest,
+and reopening it inserts a `reopen` digest. The view `projects_status`
+(`id`, `name`, `client`, `registered_active`, `active`, `status_changed_at`,
+`status_digest_id`) derives the effective flag: `active` is
+`projects.active` unless the latest `closure`/`reopen` digest is a closure.
 
-**Grants.** Two roles, both created by the provisioning file:
+Anything else the database holds — embeddings, pgvector, RAG tables, the
+service's own schema, scheduled jobs — is invisible to the kit and must not
+be required by it. The kit only ever touches the four tables above and the
+two views (`entries_current`, `projects_status`), and only through
+`--via psql`; the service is the normal reader and writer.
 
-- `nemeda_memory_reader`: `USAGE` on the schema, `SELECT` on the four tables
-  and the view;
+**Grants.** Three group roles, created by the provisioning:
+
+- `nemeda_memory_reader`: `USAGE` on the schema, `SELECT` on every table
+  and view in it;
 - `nemeda_memory_writer`: reader plus `INSERT` on `entries` and `digests`.
   No `UPDATE`, no `DELETE`: revisions are new rows, and corrections are new
-  revisions. The kit never needs more, and `doctor` warns when the connected
-  role has more than that.
+  revisions. The kit never needs more, and with `--via psql` `doctor` warns
+  when the connected role has more than that;
+- `nemeda_memory_service`: writer plus `INSERT` on the embedding tables;
+  what the service connects as.
 
-Each person gets their own database user (or a per-person password on the
-writer role, at minimum), so `promoted_by` is trustworthy and access can be
-revoked per person. The connection string is personal and never leaves
-`.env.local`.
+People do not get database users by default: they authenticate to the
+service, which records `promoted_by` from the validated token. Only
+administrators who use `--via psql` get a personal login role in
+`nemeda_memory_writer`, so `promoted_by` stays trustworthy on that path too
+and access can be revoked per person. That connection string is personal
+and never leaves `.env.local`.
 
 ### One entry shape for both levels
 
@@ -259,10 +296,12 @@ proposes consistent ones.
     "tags": ["architecture", "api", "mobile", "backend", "data-model", "deployment", "scope"]
   },
   "central": {
-    "urlVariable": "NEMEDA_MEMORY_DB_URL",
-    "schema": "nemeda_memory",
+    "mcpUrl": "https://memory.example.ts.net/mcp",
+    "tokenVariable": "NEMEDA_MEMORY_TOKEN",
     "projectId": "milence",
-    "promote": "reviewed"
+    "promote": "reviewed",
+    "urlVariable": "NEMEDA_MEMORY_DB_URL",
+    "schema": "nemeda_memory"
   }
 }
 ```
@@ -270,18 +309,28 @@ proposes consistent ones.
 - `project.store`: `journal` (default) or `sqlite-file`. `project.path` is
   workspace-relative and must resolve through a `drive.links` entry;
   `doctor` warns when it does not (memory would stay on one laptop).
-- `central` is optional. `urlVariable` is the *name* of the `.env.local`
-  variable holding the personal connection string
-  (`postgres://user:pass@host:5432/db?sslmode=require`); the config never
-  holds the value. `schema` defaults to `nemeda_memory`; `projectId`
-  defaults to `project.id` and must exist in `projects`. `promote` ∈
-  `reviewed` (default: only reviewed entries leave the project) or `all`.
+- `central` is optional. `mcpUrl` is the service's MCP endpoint (shared,
+  non-secret); the HTTP endpoints such as `POST /promote` live on the same
+  origin. `tokenVariable` is the *name* of the variable holding the
+  personal token (default `NEMEDA_MEMORY_TOKEN`), read from
+  `~/.nemeda/.env.local` because it belongs to a person, not a project; the
+  config never holds the value. `projectId` defaults to `project.id` and
+  must exist in `projects`. `promote` ∈ `reviewed` (default: only reviewed
+  entries leave the project) or `all`.
+- `urlVariable` and `schema` serve only the administrators' `--via psql`
+  transport: `urlVariable` is the *name* of the `.env.local` variable
+  holding a personal connection string
+  (`postgres://user:pass@host:5432/memoria_central?sslmode=require`), and
+  `schema` defaults to `nemeda_memory`. `urlVariable` is required only when
+  `mcpUrl` is absent; with neither, `central` is invalid.
 - `airtable.knowledgeLog` stays accepted for one release with a validator
   `warn` ("deprecated: run `nemeda-agent memory import-airtable`") and is
   removed in 0.5.0.
 
-Machine-local (`.env.local`): `NEMEDA_MEMORY_DB_URL` (personal),
-`MEMORY_HARVEST=true` (replaces `KNOWLEDGE_LOG_AUTO`; see "Unattended capture"),
+Machine-local: `NEMEDA_MEMORY_TOKEN` in `~/.nemeda/.env.local` (personal,
+for Codex, Cursor, and the CLI; Claude hosts use OAuth instead);
+`NEMEDA_MEMORY_DB_URL` (administrators only, `--via psql`);
+`MEMORY_HARVEST=true` (replaces `KNOWLEDGE_LOG_AUTO`; see "Unattended capture");
 `NEMEDA_SQLITE_BIN` and `NEMEDA_PSQL_BIN` (overrides for the CLI engines).
 
 ## Flows
@@ -313,22 +362,32 @@ Machine-local (`.env.local`): `NEMEDA_MEMORY_DB_URL` (personal),
    one) is not implemented yet; today's version is the confirm-and-write
    primitive, driven by a human or by the `memory-log` skill.
 5. **Query from any session** — the kit's MCP server exposes three
-   read-only tools backed by the journals directly (no SQLite index yet —
-   see phase 1b below): `memory_search` (same `type`/`author`/`status`/
-   `since` filters as the CLI), `memory_recent`, and `memory_get` by id.
-   `central` scope (merging in `entries_current` when `psql` is available)
-   is not implemented yet.
+   read-only tools answering through the machine-local index (phase 1b-ii):
+   `memory_search` (same `type`/`author`/`status`/`since` filters as the
+   CLI), `memory_recent`, and `memory_get` by id. Central scope comes from
+   the service's own tools (`memory_central_search`,
+   `memory_central_digests`, `memory_central_projects`): Claude hosts reach
+   them directly, and Codex and Cursor through the kit's stdio proxy (phase
+   3, not implemented yet). Agents search central first for what may have
+   been decided elsewhere, then the project journals.
    `workspace-context` tells the agent these exist and when to use them
    ("before proposing an architecture decision, search memory for prior
    resolutions").
-6. **Promotion** — `nemeda-agent memory sync` pushes journal revisions that
+6. **Promotion** — `nemeda-agent memory sync` sends journal revisions that
    match `central.promote` and are not yet acknowledged (`promotedAt` kept in
-   `.nemeda/state/memory-sync.json`). Idempotent; safe to run from a
-   SessionStart hook with the 12 h throttle already used by the PR
-   reconciler, or by hand.
+   `.nemeda/state/memory-sync.json`) to the service's `POST /promote`, which
+   answers with what it inserted and what already existed. Idempotent end to
+   end (`ON CONFLICT (id, revision) DO NOTHING` on the server); safe to run
+   from a SessionStart hook with the 12 h throttle already used by the PR
+   reconciler, or by hand. `--via psql` does the same `INSERT` directly, for
+   administrators. **Closure** — `nemeda-agent memory close` runs a final
+   promotion of every reviewed entry, then has the operator's agent write
+   the closure digest (same path as recaps) and promotes it with
+   `kind = 'closure'`; the project turns inactive through `projects_status`.
+   A later `reopen` digest reverses it.
 7. **Recaps** — `nemeda-agent memory recap --period 2026-Q3`: the local
    agent reads the period's reviewed entries (project scope from the index,
-   central scope from `entries_current`) and writes a digest (what was
+   central scope from `memory_central_search`) and writes a digest (what was
    decided, what was learned, what is still open), stored in
    `memory/digests/` and inserted into `digests` by the next sync. This is
    the "unir y recapitular" step that makes central memory readable, not
@@ -491,12 +550,13 @@ feature calling it — say so explicitly rather than changing it quietly.
 ```
 nemeda-agent memory add [--type T] [--title …] [--tags a,b] [--json]   # append one entry — shipped
 nemeda-agent memory list [--pending] [--type T] [--author E] [--since D]     # shipped
-nemeda-agent memory search QUERY [--central] [--json]                       # shipped (no --central yet)
+nemeda-agent memory search QUERY [--central] [--json]                       # shipped (no --central yet; --central calls the service)
 nemeda-agent memory review [ID] [--all] [--json]                            # shipped; ID completes an entry, no ID lists the inbox
 nemeda-agent memory harvest [--session ID] [--dry-run] [--json]        # shipped; no flag = every closed session
 nemeda-agent memory install [--interval M] | uninstall              # shipped; launchd / systemd user timer / Task Scheduler
 nemeda-agent memory index [--rebuild] [--json]                         # shipped; status, or --rebuild to force
-nemeda-agent memory sync [--dry-run]                                   # promote to central — pending (phase 3)
+nemeda-agent memory sync [--dry-run] [--via service|psql]              # promote to central — pending (phase 3)
+nemeda-agent memory close [--dry-run]                                  # final sync + closure digest — pending (phase 3)
 nemeda-agent memory recap --period P [--scope project|central]              # pending (phase 3)
 nemeda-agent memory import-airtable [--base app…] [--dry-run]               # pending (1b-iv)
 nemeda-agent memory doctor [--json]                                    # pending; today's checks live under `nemeda-agent doctor`
@@ -511,9 +571,9 @@ nemeda-agent memory doctor [--json]                                    # pending
 | `memory-engine` | `node:sqlite`, `sqlite3` CLI, or in-memory fallback; which one |
 | `memory-index` | index fresh vs. journals; entry counts by status |
 | `memory-conflicts` | sync-client conflict copies in `journal/` (`*(1).jsonl`, `*-conflict*`) |
-| `memory-psql` | `psql` on `PATH`, version |
-| `memory-central` | connection works, `meta.schema_version` compatible, `projectId` exists in `projects` |
-| `memory-grants` | connected role can `SELECT` the four tables and `INSERT` on `entries`; warns on `UPDATE`/`DELETE`/DDL rights |
+| `memory-central` | service discovery document reachable; token present and accepted (reachable / unauthenticated / version); contract version compatible; `projectId` listed by `memory_central_projects`; TEI status and rows waiting for a vector |
+| `memory-psql` | only when `urlVariable` is set: `psql` on `PATH`, version, connection works, `meta.schema_version` compatible |
+| `memory-grants` | only when `urlVariable` is set: connected role can `SELECT` the contract tables and `INSERT` on `entries`/`digests`; warns on `UPDATE`/`DELETE`/DDL rights |
 | `memory-sync` | unpromoted reviewed entries, last successful sync |
 | `memory-harvest` | opt-in state, host CLIs on `PATH`, closed sessions awaiting harvest, scheduler installed |
 | `memory-deprecated` | `airtable.knowledgeLog` still present |
@@ -528,21 +588,28 @@ nemeda-agent memory doctor [--json]                                    # pending
   (`NEMEDA_SQLITE_BIN` pointing at a script) and with the in-memory fallback,
   same results;
 - validator: `memory` section rules, `sqlite-file` warning, deprecation warn;
-- MCP tools: `memory_search` result shape with and without `central`;
-- sync and central search: `NEMEDA_PSQL_BIN` pointing at a stub script that
-  records the SQL it receives and returns canned rows, so idempotency,
-  parameter passing, the `entries_current` fallback, and the version check
-  are covered without a database;
+- MCP tools: `memory_search` result shape; the central proxy against a
+  local `node:http` stub of the service (token header, `mode: "text-only"`
+  passthrough, a clear error when the token is missing or rejected);
+- sync and close through the service: the same stub records the
+  `POST /promote` payloads, so batching, idempotency (an "already existed"
+  answer marks the entry promoted), and the closure digest are covered
+  without a network;
+- sync `--via psql`: `NEMEDA_PSQL_BIN` pointing at a stub script that
+  records the SQL it receives and returns canned rows, so parameter
+  passing, the `entries_current` fallback, and the version check are
+  covered without a database;
 - import: mapping from a canned Airtable payload, re-run skips duplicates;
 - ledger hook: cwd filter, idle detection, sub-second budget, detached spawn
   never blocks;
 - harvester: host CLIs stubbed with scripts that emit canned JSON, output
   validation, fallback path on a resume failure, `maxSessionsPerRun`.
 
-The SQL that provisions the database, and its tests, live with the
-provisioning file outside the kit. `docs/memory-central-contract.md` (to be
-extracted from the tables above when phase 3 starts) is the shared reference
-for both sides.
+The SQL that provisions the database, and its tests, live in the
+`nemeda-memory-service` repository: `migrations/0001_contract.sql` is the
+contract above as executable SQL, and `tests/contract.sql` exercises it with
+the real roles. A change to the tables in this document needs a new
+migration there, and a major change bumps `meta.schema_version`.
 
 ## Phases
 
@@ -591,13 +658,18 @@ for both sides.
      bases into journals.
 2. **Meeting integration** (with `meeting-capture-plan.md` phase 3): the
    pipeline writes `meeting` entries; `meeting-summary.md` retired.
-3. **Central connection** (0.5.0): `psql` adapter, `memory sync`, central
-   scope in the MCP tools, `memory recap`, doctor checks, contract document.
-   Depends on the database being provisioned externally. Remove
-   `airtable.knowledgeLog`.
-4. **RAG** (after 0.5.0, outside the kit): embeddings and hybrid search are
-   added to the database and its own service. The kit only changes if a new
-   read-only tool should be surfaced through `workspace-context`.
+3. **Central connection** (0.5.0): `memory.central.mcpUrl`/`tokenVariable`
+   in the validator and schema, the stdio proxy for `memory_central_*` in
+   Codex and Cursor, `memory sync` through `POST /promote` (with
+   `--via psql` for administrators), `memory close`, `memory recap`, the
+   `memory-central` doctor check (plus `memory-psql`/`memory-grants` for the
+   psql path), and the `memory-log` skill searching central first. Depends
+   on the service being deployed (central-memory-plan.md, steps 1–2).
+   Remove `airtable.knowledgeLog`.
+4. **RAG** (outside the kit): embeddings and hybrid search live in the
+   database and the service from the start (central-memory-plan.md); the kit
+   only surfaces the service's read-only tools through `workspace-context`
+   and the proxy.
 
 ## Open questions
 
@@ -606,17 +678,16 @@ for both sides.
   is a `tasks.provider` (`airtable | jira | github-projects`) with the same
   reconciler; the Jira MCP already used on this machine is the first
   candidate. Separate plan.
-- **Who may read central memory.** Per-person tokens scoped to projects is
-  the minimum; whether every employee sees every project's *internal*
-  summaries is a policy decision, not a technical one. The `clientSummary`
-  field exists so a project-restricted reader still gets something.
+- **Who may read central memory.** Decided: everyone reads every project.
+  The service's `people.projects` column (default `{*}`) exists so a
+  contractor or client-side reader can be scoped later without a schema
+  change; `clientSummary` is what such a reader would get.
 - **Model for recaps.** Recaps run through the operator's own subscription
   (no API key), like the Slack bridge. Embeddings and any RAG model choice
   are the database side's decision and stay out of the plugin.
-- **`psql` on every machine.** It is the one external binary this layer
-  needs. If that turns out to be a blocker on Windows laptops, the fallback
-  is a thin HTTP endpoint in front of the database (PostgREST or similar)
-  reached with `fetch`; the contract above does not change.
+- **`psql` on every machine.** Resolved by the service: people reach
+  central memory over HTTPS with `fetch`, and only administrators using
+  `--via psql` need the binary and database credentials.
 - **Journal growth.** JSONL journals grow forever; at a few hundred entries a
   year per person this is irrelevant for a decade. If it ever matters, the
   central database is the archive and `memory index` can cap the local
