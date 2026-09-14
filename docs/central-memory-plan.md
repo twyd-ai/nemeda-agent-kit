@@ -133,9 +133,10 @@ create index on nemeda_memory.embeddings using hnsw (embedding vector_cosine_ops
   anywhere; `doctor` keeps warning on anything broader for the roles a
   person may hold.
 - **Project closure is append-only.** Closing a project inserts one digest
-  with `kind = 'closure'` (a new nullable column on `digests`, default
-  `'recap'`); a view `projects_status` derives `active = not exists
-  (closure digest)`. Nothing updates `projects`, which stays the registry
+  with `kind = 'closure'` (a new column on `digests`, `not null default
+  'recap'`, checked against `recap | closure | reopen`, so an insert that
+  omits it stays valid); a view `projects_status` derives the active flag
+  from the latest closure or reopen digest. Nothing updates `projects`, which stays the registry
   the provisioning owns and the kit only reads. Reopening a project is one
   more row: a digest with `kind = 'reopen'`, and the view takes the latest.
 
