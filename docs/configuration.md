@@ -684,7 +684,10 @@ read-only tools — `memory_central_search`, `memory_central_digests`,
 `memory_central_projects`, `memory_central_whoami` — through this kit's MCP
 server, which forwards them with your token when it is started with
 `--central-proxy` (the plugin's `mcp.json` does this) or with
-`NEMEDA_MEMORY_CENTRAL_PROXY=true`. Writing to central memory is only ever
+`NEMEDA_MEMORY_CENTRAL_PROXY=true` in the environment or in
+`~/.nemeda/.env.local`. The latter is how Claude Code uses the same proxy,
+with the token kept out of `~/.claude.json`, until it can sign in to the
+service directly; turn it off again then, or the tools appear twice. Writing to central memory is only ever
 `memory sync`, never an agent tool.
 
 `nemeda-agent doctor` checks the configuration and that a token is present,

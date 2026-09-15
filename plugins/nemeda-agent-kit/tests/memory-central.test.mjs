@@ -335,6 +335,14 @@ test("the MCP server proxies the read-only central tools only with --central-pro
       { jsonrpc: "2.0", id: 2, method: "tools/list", params: {} }
     ]);
     assert.equal(plain.get(2).result.tools.some((tool) => tool.name.startsWith("memory_central_")), false);
+
+    // Claude Code's .mcp.json passes no flag: a person opts in per machine.
+    writeFileSync(path.join(env.NEMEDA_HOME, ".env.local"), "NEMEDA_MEMORY_CENTRAL_PROXY=true\n");
+    const optedIn = await callMcp([], env, [
+      { jsonrpc: "2.0", id: 1, method: "initialize", params: {} },
+      { jsonrpc: "2.0", id: 2, method: "tools/list", params: {} }
+    ]);
+    assert.ok(optedIn.get(2).result.tools.some((tool) => tool.name === "memory_central_search"));
   } finally {
     await stub.close();
   }

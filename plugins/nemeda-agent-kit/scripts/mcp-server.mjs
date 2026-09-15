@@ -1,7 +1,6 @@
 #!/usr/bin/env node
-import { flagEnabled } from "./lib/env.mjs";
 import { listTranscripts } from "./lib/meetings-core.mjs";
-import { CENTRAL_PROXY_TOOLS, callCentralTool, centralSettings, resolveCentralToken } from "./lib/memory-central.mjs";
+import { CENTRAL_PROXY_TOOLS, callCentralTool, centralProxyEnabled, centralSettings, resolveCentralToken } from "./lib/memory-central.mjs";
 import { queryEntries } from "./lib/memory-index.mjs";
 import {
   defaultWorkspaceDirectory,
@@ -12,9 +11,10 @@ import {
 
 const SERVER_INFO = { name: "nemeda-agent-kit", version: "0.3.0" };
 // mcp.json (Codex, Cursor) starts this server with --central-proxy; Claude
-// hosts connect to the memory service directly, so .mcp.json does not, and
-// the central tools are never listed twice there.
-const CENTRAL_PROXY = process.argv.includes("--central-proxy") || flagEnabled("NEMEDA_MEMORY_CENTRAL_PROXY");
+// hosts will connect to the memory service directly, so .mcp.json does not,
+// and the central tools are never listed twice there. Until then a person
+// can opt in with NEMEDA_MEMORY_CENTRAL_PROXY=true in ~/.nemeda/.env.local.
+const CENTRAL_PROXY = process.argv.includes("--central-proxy") || centralProxyEnabled(process.env);
 
 const memoryFilterProperties = {
   type: { type: "string", enum: ["ai-interaction", "decision", "finding", "meeting"], description: "Restrict to one entry type." },

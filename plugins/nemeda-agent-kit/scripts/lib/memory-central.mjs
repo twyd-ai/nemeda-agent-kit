@@ -112,6 +112,16 @@ export function resolvePersonalVariable(root, name, environment = process.env) {
   return { value: null, source: null };
 }
 
+// Whether the kit's MCP server should list the central proxy tools without
+// --central-proxy: NEMEDA_MEMORY_CENTRAL_PROXY=true in the environment or in
+// ~/.nemeda/.env.local. That is how Claude Code uses the proxy (its
+// .mcp.json does not pass the flag) until it connects to the service
+// directly with Entra sign-in; opt-in per machine, never per project.
+export function centralProxyEnabled(environment = process.env) {
+  const { value } = resolvePersonalVariable(null, "NEMEDA_MEMORY_CENTRAL_PROXY", environment);
+  return ["true", "1", "yes"].includes(String(value || "").trim().toLowerCase());
+}
+
 // Warns when the file holding the token is readable by other users (POSIX
 // only; Windows ACLs are not inspected).
 export function tokenFileTooOpen(source, platform = process.platform) {
