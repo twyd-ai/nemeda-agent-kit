@@ -1,8 +1,8 @@
 # Knowledge memory plan
 
-Status: project layer implemented (phases 1a–1b-iii, see "Phases"); central
-layer client implemented (phases 3a–3c). Target release: 0.4.0 (project layer), 0.5.0 (central
-layer). Supersedes `airtable.knowledgeLog`. The central database and its
+Status: shipped in 0.4.0 — the project layer (phases 1a–1b-iii, see
+"Phases") and the central layer client (phases 3a–3c); `import-airtable`
+(1b-iv) still pending. Supersedes `airtable.knowledgeLog`. The central database and its
 service are designed in [central-memory-plan.md](central-memory-plan.md).
 
 Goal: replace the Airtable Knowledge Log with a memory layer the kit owns end
@@ -340,7 +340,7 @@ proposes consistent ones.
   `mcpUrl` is absent; with neither, `central` is invalid.
 - `airtable.knowledgeLog` stays accepted for one release with a validator
   `warn` ("deprecated: run `nemeda-agent memory import-airtable`") and is
-  removed in 0.5.0.
+  removed in the first release after `import-airtable` ships.
 
 Machine-local: `NEMEDA_MEMORY_TOKEN` in `~/.nemeda/.env.local` (personal,
 for Codex, Cursor, and the CLI; Claude hosts use OAuth instead);
@@ -682,7 +682,7 @@ migration there, and a major change bumps `meta.schema_version`.
      bases into journals.
 2. **Meeting integration** (with `meeting-capture-plan.md` phase 3): the
    pipeline writes `meeting` entries; `meeting-summary.md` retired.
-3. **Central connection** (0.5.0). Depends on the service being deployed
+3. **Central connection** (0.4.0). Depends on the service being deployed
    (central-memory-plan.md, steps 1–2) and the project being registered.
    - **3a, done**: `memory.central.mcpUrl`/`tokenVariable` in the validator
      and schema (`urlVariable` optional), the token lookup (environment,

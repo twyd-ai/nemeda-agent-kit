@@ -1,6 +1,6 @@
 {
   "name": "nemeda-agent-kit",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Portable methodology, tools, and repository context for AI coding agents.",
   "author": { "name": "Nemeda" },
   "repository": "https://github.com/marcnaa/nemeda-agent-kit",

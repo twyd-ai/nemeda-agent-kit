@@ -9,7 +9,7 @@ import {
   workspaceDoctor
 } from "./lib/workspace.mjs";
 
-const SERVER_INFO = { name: "nemeda-agent-kit", version: "0.3.0" };
+const SERVER_INFO = { name: "nemeda-agent-kit", version: "0.4.0" };
 // mcp.json (Codex, Cursor) starts this server with --central-proxy; Claude
 // hosts will connect to the memory service directly, so .mcp.json does not,
 // and the central tools are never listed twice there. Until then a person
