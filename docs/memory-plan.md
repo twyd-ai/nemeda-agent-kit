@@ -1,7 +1,7 @@
 # Knowledge memory plan
 
 Status: project layer implemented (phases 1a–1b-iii, see "Phases"); central
-layer client implemented (phase 3a), `close`/`recap`/`--via psql` pending. Target release: 0.4.0 (project layer), 0.5.0 (central
+layer client implemented (phases 3a–3b), `--via psql` pending. Target release: 0.4.0 (project layer), 0.5.0 (central
 layer). Supersedes `airtable.knowledgeLog`. The central database and its
 service are designed in [central-memory-plan.md](central-memory-plan.md).
 
@@ -156,7 +156,7 @@ npm packages:
   and `psql` on `PATH`.
 
 **Service endpoints the kit uses** (`scripts/lib/memory-central.mjs`;
-proposed to the service's owner, pending confirmation). The base URL is
+agreed with the service, which implements it in its phase 2). The base URL is
 `mcpUrl` without its trailing `/mcp`; every call but `/health` carries
 `Authorization: Bearer <token>`:
 
@@ -398,8 +398,9 @@ for Codex, Cursor, and the CLI; Claude hosts use OAuth instead);
    `kind = 'closure'`; the project turns inactive through `projects_status`.
    A later `reopen` digest reverses it.
 7. **Recaps** — `nemeda-agent memory recap --period 2026-Q3`: the local
-   agent reads the period's reviewed entries (project scope from the index,
-   central scope from `memory_central_search`) and writes a digest (what was
+   agent reads the period's reviewed entries (the host CLI, claude or codex
+   as for the harvester, or an agent already in session piping the
+   Markdown on stdin) and writes a digest (what was
    decided, what was learned, what is still open), stored in
    `memory/digests/` and inserted into `digests` by the next sync. This is
    the "unir y recapitular" step that makes central memory readable, not
@@ -568,8 +569,9 @@ nemeda-agent memory harvest [--session ID] [--dry-run] [--json]        # shipped
 nemeda-agent memory install [--interval M] | uninstall              # shipped; launchd / systemd user timer / Task Scheduler
 nemeda-agent memory index [--rebuild] [--json]                         # shipped; status, or --rebuild to force
 nemeda-agent memory sync [--all] [--dry-run] [--via service|psql]      # shipped through the service; --via psql pending (3c)
-nemeda-agent memory close [--dry-run]                                  # final sync + closure digest — pending (phase 3)
-nemeda-agent memory recap --period P [--scope project|central]              # pending (phase 3)
+nemeda-agent memory close [--host H] [--dry-run | --yes]               # shipped: closure digest + sync of every author
+nemeda-agent memory reopen [--dry-run | --yes]                         # shipped: reopen digest + sync
+nemeda-agent memory recap --period P [--host H] [--dry-run]            # shipped: project scope (central recaps are the service's job)
 nemeda-agent memory import-airtable [--base app…] [--dry-run]               # pending (1b-iv)
 nemeda-agent memory doctor [--json]                                    # shipped: memory rows plus the online central checks
 ```
@@ -687,10 +689,17 @@ migration there, and a major change bumps `meta.schema_version`.
      context line pointing agents at central search, and the `memory-log`
      skill writing confirmed entries as `reviewed` so they are promotable.
      All tested against a `node:http` stub of the service.
-   - **3b, pending**: `memory recap` and `memory close` (digest written by
-     the operator's own agent, like the harvester; promoted with
-     `kind = 'recap' | 'closure'`), and `memory sync` from `SessionStart`
-     with the 12 h throttle.
+   - **3b, done**: digests as write-once Markdown files with front matter
+     under `<memory>/digests/` (`scripts/lib/memory-digest.mjs`);
+     `memory recap --period YYYY|YYYY-Qn|YYYY-MM`, `memory close`, and
+     `memory reopen` (`scripts/lib/memory-recap.mjs`), the body piped on
+     stdin or written by the host CLI from reviewed entries only (prompt on
+     stdin, tool-less, recursion guard); `close`/`reopen` need `--yes`
+     and run a sync of every author's entries and digests; `memory sync`
+     promotes digests after entries; and a detached `memory sync` from
+     `SessionStart` at most every 12 h once `mcpUrl` and a token exist
+     (`MEMORY_SYNC_AUTO=false` turns it off, log in
+     `.nemeda/state/memory-sync.log`).
    - **3c, pending**: `memory sync --via psql` with the `memory-psql` and
      `memory-grants` doctor rows. Remove `airtable.knowledgeLog`.
 4. **RAG** (outside the kit): embeddings and hybrid search live in the

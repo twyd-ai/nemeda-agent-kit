@@ -5,7 +5,6 @@
 import assert from "node:assert/strict";
 import { execFile, execFileSync, spawn } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import http from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -24,84 +23,13 @@ import {
 } from "../scripts/lib/memory-central.mjs";
 import { describeSyncError, readSyncState, syncStatePath, syncToCentral } from "../scripts/lib/memory-sync.mjs";
 import { validateConfig } from "../scripts/lib/workspace.mjs";
+import { STUB_TOKEN, startStub } from "./central-stub.mjs";
 
 const pluginRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const cliPath = path.join(pluginRoot, "scripts", "cli.mjs");
 const serverPath = path.join(pluginRoot, "scripts", "mcp-server.mjs");
 const execFileAsync = promisify(execFile);
-const TOKEN = "stub-secret-token";
-
-// A stand-in for nemeda-memory-service: /health, /whoami, /promote, and a
-// Streamable HTTP /mcp that assigns a session id and answers in JSON or SSE.
-function startStub({ projects = ["acme"], sse = false } = {}) {
-  const state = { rows: new Map(), requests: [] };
-  const server = http.createServer(async (request, response) => {
-    let raw = "";
-    for await (const chunk of request) raw += chunk;
-    const body = raw ? JSON.parse(raw) : null;
-    state.requests.push({ method: request.method, url: request.url, auth: request.headers.authorization, headers: request.headers, body });
-    const reply = (status, payload, headers = {}) => {
-      response.writeHead(status, { "content-type": "application/json", ...headers });
-      response.end(payload === undefined ? "" : JSON.stringify(payload));
-    };
-    if (request.url === "/health") return reply(200, { service: "stub", version: "0.0.1", contractVersion: 1, embeddings: { status: "ok", pending: 0 } });
-    if (request.headers.authorization !== `Bearer ${TOKEN}`) return reply(401, { detail: "invalid token" });
-    if (request.url === "/whoami") return reply(200, { email: "ana@example.com", projects: ["*"], canPromote: true });
-    if (request.url === "/promote" && request.method === "POST") {
-      const inserted = [];
-      const existing = [];
-      const errors = [];
-      for (const row of body.entries) {
-        if (!projects.includes(row.project_id)) {
-          errors.push({ id: row.id, revision: row.revision, code: "unknown-project", message: `no project ${row.project_id}` });
-          continue;
-        }
-        const key = `${row.id}:${row.revision}`;
-        if (state.rows.has(key)) existing.push({ id: row.id, revision: row.revision });
-        else {
-          state.rows.set(key, row);
-          inserted.push({ id: row.id, revision: row.revision });
-        }
-      }
-      return reply(200, { entries: { inserted, existing }, digests: { inserted: [], existing: [] }, errors });
-    }
-    if (request.url === "/mcp") {
-      if (request.method === "DELETE") return reply(200, {});
-      if (body.method === "initialize") {
-        return reply(200, { jsonrpc: "2.0", id: body.id, result: { protocolVersion: "2025-06-18", capabilities: { tools: {} }, serverInfo: { name: "stub" } } }, { "mcp-session-id": "session-1" });
-      }
-      if (body.method === "notifications/initialized") {
-        response.writeHead(202);
-        return response.end();
-      }
-      if (body.method === "tools/call") {
-        if (request.headers["mcp-session-id"] !== "session-1") return reply(400, { detail: "missing session" });
-        const payload = body.params.name === "memory_central_projects"
-          ? { projects: projects.map((id) => ({ id, active: true })) }
-          : { tool: body.params.name, arguments: body.params.arguments, results: [] };
-        const message = { jsonrpc: "2.0", id: body.id, result: { content: [{ type: "text", text: JSON.stringify(payload) }] } };
-        if (sse) {
-          response.writeHead(200, { "content-type": "text/event-stream" });
-          return response.end(`event: message\ndata: ${JSON.stringify(message)}\n\n`);
-        }
-        return reply(200, message);
-      }
-    }
-    return reply(404, { detail: "not found" });
-  });
-  return new Promise((resolve) => {
-    server.listen(0, "127.0.0.1", () => {
-      resolve({
-        state,
-        url: `http://127.0.0.1:${server.address().port}/mcp`,
-        close: () => new Promise((done) => {
-          server.closeAllConnections();
-          server.close(done);
-        })
-      });
-    });
-  });
-}
+const TOKEN = STUB_TOKEN;
 
 function baseConfig(central) {
   return {

@@ -9,8 +9,12 @@
 // Stop, which fires after every turn) it also:
 // - spawns a detached `nemeda-agent memory harvest` when MEMORY_HARVEST=true
 //   and earlier sessions have closed, so nobody has to remember to run it;
-// - tells the agent how many of the user's entries await `memory review`.
+// - tells the agent how many of the user's entries await `memory review`;
+// - spawns a detached `nemeda-agent memory sync` at most every 12 h when
+//   memory.central.mcpUrl and a personal token exist (MEMORY_SYNC_AUTO=false
+//   turns it off).
 import { pendingReviewCount, recordSessionActivity, resolveMemoryHookWorkspace, shouldTriggerHarvest, spawnDetachedHarvest } from "../lib/harvest.mjs";
+import { shouldTriggerSync, spawnDetachedSync } from "../lib/memory-sync.mjs";
 
 // The Slack runner injects repository context itself and must stay
 // read-only. A session the harvester itself resumed must never record
@@ -34,6 +38,9 @@ try {
       if (decision.trigger) {
         spawnDetachedHarvest(workspace.root, { environment: process.env });
         lines.push(`Project memory: summarising ${decision.closed} earlier session${decision.closed === 1 ? "" : "s"} in the background; the resulting entries land as pending review (log: .nemeda/state/harvest.log).`);
+      }
+      if (shouldTriggerSync(workspace.root, workspace.config, process.env).trigger) {
+        spawnDetachedSync(workspace.root, { environment: process.env });
       }
       const pending = pendingReviewCount(workspace.root, workspace.config, process.env);
       if (pending > 0) {

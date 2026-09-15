@@ -648,6 +648,27 @@ service refuses (for example, an unregistered project) is retried by the
 next sync. `nemeda-agent memory search "query" --central` searches central
 memory from the terminal.
 
+Once `mcpUrl` and your token are in place, the `SessionStart` hook starts
+`memory sync` in the background at most every 12 hours, so reviewed memory
+reaches central without anyone remembering to run it (log:
+`.nemeda/state/memory-sync.log`). `MEMORY_SYNC_AUTO=false` in `.env.local`
+turns that off on one machine.
+
+`nemeda-agent memory recap --period 2026-Q3` (also `2026` or `2026-09`)
+writes a digest of that period's reviewed entries — Decided, Learned, Still
+open — under `<memory.project.path>/digests/`, one write-once Markdown file
+per digest. The body is the Markdown on stdin when there is some (an agent
+already in a session wrote it), otherwise your local `claude` or `codex`
+writes it (`--host`; it costs tokens); `--dry-run` shows it without
+writing. The next `memory sync` promotes it.
+
+`nemeda-agent memory close --yes` is the last step of a project: a closure
+digest of its whole reviewed history, then a sync of every author's
+entries and digests, which marks the project closed in central memory
+(`--dry-run` previews the digest first). `nemeda-agent memory reopen --yes`
+undoes it with a reopen digest; nothing in central memory is ever updated
+or deleted.
+
 In agent sessions, Claude Desktop and Claude Code connect to the service
 directly as an MCP connector (Entra sign-in). Codex and Cursor get the same
 read-only tools — `memory_central_search`, `memory_central_digests`,

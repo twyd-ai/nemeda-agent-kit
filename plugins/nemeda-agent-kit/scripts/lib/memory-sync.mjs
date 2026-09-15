@@ -4,10 +4,13 @@
 // acknowledged yet, to the service's POST /promote. The service inserts with
 // ON CONFLICT (id, revision) DO NOTHING, so re-sending is always safe; the
 // acknowledgement file only avoids re-sending what already went through.
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { spawn } from "node:child_process";
+import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { latestRevisions, readAllJournals, resolveAuthorEmail } from "./memory.mjs";
-import { CentralError, centralSettings, promoteBatch, requireCentralToken } from "./memory-central.mjs";
+import { CentralError, centralSettings, promoteBatch, requireCentralToken, resolveCentralToken } from "./memory-central.mjs";
+import { readDigests } from "./memory-digest.mjs";
 
 // Matches the service's per-request limit.
 export const PROMOTE_BATCH_SIZE = 200;
@@ -16,16 +19,18 @@ export function syncStatePath(root) {
   return path.join(root, ".nemeda", "state", "memory-sync.json");
 }
 
-// { promoted: { [entryId]: highest acknowledged revision }, lastSyncAt,
-// lastError }. Machine-local, disposable: losing it only means the next
-// sync re-sends rows the service then reports as already existing.
+// { promoted: { [entryId]: highest acknowledged revision }, digests:
+// { [digestId]: true }, lastSyncAt, lastAttemptAt, lastError }.
+// Machine-local, disposable: losing it only means the next sync re-sends
+// rows the service then reports as already existing.
 export function readSyncState(root) {
   const file = syncStatePath(root);
-  const empty = { promoted: {}, lastSyncAt: null, lastError: null };
+  const empty = { promoted: {}, digests: {}, lastSyncAt: null, lastAttemptAt: null, lastError: null };
   if (!existsSync(file)) return empty;
   try {
     const parsed = JSON.parse(readFileSync(file, "utf8"));
-    return { ...empty, ...parsed, promoted: parsed.promoted && typeof parsed.promoted === "object" ? parsed.promoted : {} };
+    const objectOrEmpty = (value) => (value && typeof value === "object" && !Array.isArray(value) ? value : {});
+    return { ...empty, ...parsed, promoted: objectOrEmpty(parsed.promoted), digests: objectOrEmpty(parsed.digests) };
   } catch {
     return empty;
   }
@@ -64,6 +69,29 @@ export function entryToContractRow(entry, projectId) {
   };
 }
 
+// A digest file as a row of the central `digests` table.
+export function digestToContractRow(digest, projectId) {
+  return {
+    id: digest.id,
+    scope: digest.scope || "project",
+    project_id: projectId,
+    period: digest.period,
+    body: digest.body,
+    generated_by: digest.generatedBy,
+    kind: digest.kind,
+    created_at: digest.createdAt
+  };
+}
+
+// Digests not yet acknowledged, optionally only the ones this author wrote,
+// oldest first so a closure never overtakes the recaps before it.
+export function promotableDigests(digests, { author, state } = {}) {
+  return digests
+    .filter((digest) => !author || digest.generatedBy === author)
+    .filter((digest) => !state?.digests?.[digest.id])
+    .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
+}
+
 // Latest revision per entry, filtered by the promote policy ("reviewed":
 // only reviewed entries leave the project; "all": everything), optionally by
 // author, minus what `state` already acknowledges. Oldest first, so a
@@ -95,6 +123,7 @@ export async function syncToCentral(root, config, { environment = process.env, f
   const state = readSyncState(root);
   const { entries } = readAllJournals(memoryRoot);
   const candidates = promotableEntries(entries, { promote: settings.promote, author, state });
+  const digestCandidates = promotableDigests(readDigests(memoryRoot).digests, { author, state });
   const report = {
     endpoint: `${settings.baseUrl}/promote`,
     projectId: settings.projectId,
@@ -104,11 +133,17 @@ export async function syncToCentral(root, config, { environment = process.env, f
     candidates: candidates.map((entry) => ({ id: entry.id, revision: entry.revision, title: entry.title, author: entry.author })),
     inserted: [],
     existing: [],
+    digests: {
+      candidates: digestCandidates.map((digest) => ({ id: digest.id, kind: digest.kind, period: digest.period, generatedBy: digest.generatedBy })),
+      inserted: [],
+      existing: []
+    },
     errors: []
   };
-  if (dryRun || candidates.length === 0) return report;
+  if (dryRun || (candidates.length === 0 && digestCandidates.length === 0)) return report;
 
   const token = requireCentralToken(root, settings, environment);
+  state.lastAttemptAt = now().toISOString();
   const sent = new Map(candidates.map((entry) => [entry.id, entry.revision]));
   const acknowledge = (item) => {
     if (!item || !sent.has(item.id)) return false;
@@ -126,6 +161,30 @@ export async function syncToCentral(root, config, { environment = process.env, f
       state.lastSyncAt = now().toISOString();
       writeSyncState(root, state);
     }
+    // Digests after entries, so a closure never lands before the entries it
+    // closes over. The service answers digest ids as strings or { id }.
+    const sentDigests = new Set(digestCandidates.map((digest) => digest.id));
+    const acknowledgeDigest = (item) => {
+      const id = typeof item === "string" ? item : item?.id;
+      if (!sentDigests.has(id)) return null;
+      state.digests[id] = true;
+      return id;
+    };
+    for (let start = 0; start < digestCandidates.length; start += PROMOTE_BATCH_SIZE) {
+      const batch = digestCandidates.slice(start, start + PROMOTE_BATCH_SIZE);
+      const answer = await promoteBatch(settings, token, { digests: batch.map((digest) => digestToContractRow(digest, settings.projectId)) }, fetchImpl ? { fetchImpl } : {});
+      for (const item of answer.digests.inserted) {
+        const id = acknowledgeDigest(item);
+        if (id) report.digests.inserted.push(id);
+      }
+      for (const item of answer.digests.existing) {
+        const id = acknowledgeDigest(item);
+        if (id) report.digests.existing.push(id);
+      }
+      report.errors.push(...answer.errors);
+      state.lastSyncAt = now().toISOString();
+      writeSyncState(root, state);
+    }
     state.lastError = report.errors.length ? `${report.errors.length} row(s) refused by the service` : null;
     writeSyncState(root, state);
   } catch (error) {
@@ -134,6 +193,65 @@ export async function syncToCentral(root, config, { environment = process.env, f
     throw error;
   }
   return report;
+}
+
+// ---------------------------------------------------------------------------
+// Automatic sync from SessionStart, at most every AUTO_SYNC_INTERVAL_MS, so
+// reviewed memory reaches central without anyone remembering to run it.
+// ---------------------------------------------------------------------------
+
+export const AUTO_SYNC_INTERVAL_MS = 12 * 60 * 60 * 1000;
+const LOG_ROTATE_BYTES = 512 * 1024;
+const DEFAULT_CLI_PATH = fileURLToPath(new URL("../cli.mjs", import.meta.url));
+
+export function syncLogPath(root) {
+  return path.join(root, ".nemeda", "state", "memory-sync.log");
+}
+
+// Cheap enough for a hook: config, one token lookup, one state read. On by
+// default once memory.central.mcpUrl and a token exist (the committed config
+// is the project's opt-in, the personal token the person's);
+// MEMORY_SYNC_AUTO=false in .env.local turns it off on one machine.
+export function shouldTriggerSync(root, config, environment = process.env, { now = Date.now() } = {}) {
+  const settings = centralSettings(config);
+  if (!settings?.baseUrl) return { trigger: false, reason: "memory.central.mcpUrl is not set" };
+  if (["false", "0", "no", "off"].includes(String(environment.MEMORY_SYNC_AUTO || "").trim().toLowerCase())) {
+    return { trigger: false, reason: "MEMORY_SYNC_AUTO is off" };
+  }
+  if (!resolveCentralToken(root, settings, environment).token) return { trigger: false, reason: "no token for the memory service" };
+  const last = Date.parse(readSyncState(root).lastAttemptAt || "");
+  if (Number.isFinite(last) && now - last < AUTO_SYNC_INTERVAL_MS) return { trigger: false, reason: "a sync ran less than 12 h ago" };
+  return { trigger: true };
+}
+
+// Records the attempt first (so sessions opened in quick succession do not
+// each start one), then starts `nemeda-agent memory sync` fully detached,
+// logging to .nemeda/state/memory-sync.log (rotated past 512 KB). Returns
+// the child's pid.
+export function spawnDetachedSync(root, { environment = process.env, cliPath = DEFAULT_CLI_PATH, now = Date.now() } = {}) {
+  const state = readSyncState(root);
+  state.lastAttemptAt = new Date(now).toISOString();
+  writeSyncState(root, state);
+  const logPath = syncLogPath(root);
+  try {
+    if (statSync(logPath).size > LOG_ROTATE_BYTES) renameSync(logPath, `${logPath}.1`);
+  } catch {
+    // No log yet: nothing to rotate.
+  }
+  appendFileSync(logPath, `\n[${new Date(now).toISOString()}] background sync started from SessionStart\n`);
+  const fd = openSync(logPath, "a");
+  try {
+    const child = spawn(process.execPath, [cliPath, "memory", "sync", "--cwd", root], {
+      cwd: root,
+      detached: true,
+      stdio: ["ignore", fd, fd],
+      env: environment
+    });
+    child.unref();
+    return child.pid;
+  } finally {
+    closeSync(fd);
+  }
 }
 
 // What an unknown-project refusal means in practice, for CLI output.

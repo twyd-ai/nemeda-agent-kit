@@ -52,6 +52,8 @@ function parseArguments(argv) {
     else if (value === "--force") options.force = true;
     else if (value === "--via") options.via = rest[++index];
     else if (value === "--central") options.central = true;
+    else if (value === "--period") options.period = rest[++index];
+    else if (value === "--host") options.host = rest[++index];
     else if (command === "meeting" && options.subcommand === "notes" && !options.folder && !value.startsWith("-")) options.folder = value;
     else if (command === "meeting" && options.subcommand === "process" && !options.file && !value.startsWith("-")) options.file = value;
     else if (command === "memory" && options.subcommand === "search" && !options.query && !value.startsWith("-")) options.query = value;
@@ -100,6 +102,9 @@ Usage:
   nemeda-agent memory uninstall [--dry-run] [--json]
   nemeda-agent memory sync [--all] [--dry-run] [--json]
   nemeda-agent memory doctor [--json]
+  nemeda-agent memory recap --period PERIOD [--host claude|codex] [--dry-run] [--json]
+  nemeda-agent memory close [--host claude|codex] [--dry-run | --yes] [--json]
+  nemeda-agent memory reopen [--dry-run | --yes] [--json]
 
 Commands:
   init     Create missing .nemeda/agent-kit.json and AGENTS.md safely.
@@ -192,6 +197,17 @@ Commands:
              doctor    the memory checks, plus the online central ones:
                        service reachable, contract version, token accepted,
                        project registered, entries waiting for sync
+             recap     write a digest of PERIOD's reviewed entries (YYYY,
+                       YYYY-Qn, YYYY-MM) under <memory>/digests/: the
+                       Markdown on stdin if given, otherwise written by
+                       your local claude or codex (--host; costs tokens).
+                       The next sync promotes it
+             close     the last step of a project: a closure digest of its
+                       whole reviewed history, then a sync of every
+                       author's entries and digests, which marks the
+                       project closed in central memory. --dry-run
+                       previews the digest; --yes does it
+             reopen    undo a close with a reopen digest (--yes)
 `;
 }
 
@@ -390,6 +406,23 @@ async function readStdin() {
   return input;
 }
 
+function printSyncReport(report, describeSyncError) {
+  const digestCandidates = report.digests?.candidates || [];
+  if (report.candidates.length === 0 && digestCandidates.length === 0) {
+    console.log(`Nothing to promote to ${report.projectId} (${report.scope}, policy "${report.promote}").`);
+    return;
+  }
+  if (report.dryRun) {
+    console.log(`Would promote to ${report.projectId} via ${report.endpoint}:`);
+    for (const candidate of report.candidates) console.log(`  entry  ${candidate.id} r${candidate.revision} ${candidate.title} (${candidate.author})`);
+    for (const digest of digestCandidates) console.log(`  digest ${digest.id} ${digest.kind} ${digest.period} (${digest.generatedBy})`);
+    return;
+  }
+  const digests = report.digests || { inserted: [], existing: [] };
+  console.log(`Promoted to ${report.projectId}: entries ${report.inserted.length} new, ${report.existing.length} already there; digests ${digests.inserted.length} new, ${digests.existing.length} already there${report.errors.length ? `; ${report.errors.length} refused` : ""}.`);
+  for (const error of report.errors) console.log(`  refused ${describeSyncError(error, report.projectId)}`);
+}
+
 function summarizeMemoryEntry(entry) {
   return `[${entry.status}] ${entry.date} ${entry.type} — ${entry.title} (${entry.author}) ${entry.id}`;
 }
@@ -530,18 +563,45 @@ async function runMemory(options) {
       print(report, true);
       return report.errors.length ? 1 : 0;
     }
-    if (report.candidates.length === 0) {
-      console.log(`Nothing to promote to ${report.projectId} (${report.scope}, policy "${report.promote}").`);
-      return 0;
-    }
-    if (report.dryRun) {
-      console.log(`Would promote ${report.candidates.length} entr${report.candidates.length === 1 ? "y" : "ies"} to ${report.projectId} via ${report.endpoint}:`);
-      for (const candidate of report.candidates) console.log(`  ${candidate.id} r${candidate.revision} ${candidate.title} (${candidate.author})`);
-      return 0;
-    }
-    console.log(`Promoted to ${report.projectId}: ${report.inserted.length} new, ${report.existing.length} already there${report.errors.length ? `, ${report.errors.length} refused` : ""}.`);
-    for (const error of report.errors) console.log(`  refused ${describeSyncError(error, report.projectId)}`);
+    printSyncReport(report, describeSyncError);
     return report.errors.length ? 1 : 0;
+  }
+
+  if (subcommand === "recap" || subcommand === "close" || subcommand === "reopen") {
+    const recap = await import("./lib/memory-recap.mjs");
+    const host = options.host || recap.defaultRecapHost(process.env);
+    const dryRun = Boolean(options.dryRun);
+    if (subcommand !== "recap" && !options.yes && !dryRun) {
+      throw new Error(subcommand === "close"
+        ? "memory close promotes every author's reviewed entries and marks the project closed in central memory. Preview it with --dry-run, then run it again with --yes."
+        : "memory reopen marks the project active again in central memory. Run it again with --yes.");
+    }
+    const body = (await readStdin()).trim();
+    let result;
+    if (subcommand === "recap") {
+      if (!options.period) throw new Error("memory recap needs --period (YYYY, YYYY-Qn, or YYYY-MM).");
+      result = recap.recapProject(context.root, context.config, { period: options.period, body, host, dryRun });
+    } else {
+      result = await (subcommand === "close" ? recap.closeProject : recap.reopenProject)(context.root, context.config, { body, host, dryRun });
+    }
+    if (options.json) {
+      print(result, true);
+      return result.sync?.errors?.length ? 1 : 0;
+    }
+    const label = { recap: `${result.digest.period} recap`, closure: "closure digest", reopen: "reopen digest" }[result.digest.kind];
+    if (result.dryRun) {
+      console.log(`The ${label} (dry run, nothing written${result.entries !== undefined ? `; from ${result.entries} reviewed entries` : ""}):\n`);
+      console.log(result.digest.body);
+      return 0;
+    }
+    console.log(`Wrote the ${label}${result.generatedWith ? ` (written by ${result.generatedWith} from ${result.entries} reviewed entries)` : ""} -> ${result.file}`);
+    if (!result.sync) {
+      console.log("It reaches central memory with the next `nemeda-agent memory sync`.");
+      return 0;
+    }
+    const { describeSyncError } = await import("./lib/memory-sync.mjs");
+    printSyncReport(result.sync, describeSyncError);
+    return result.sync.errors.length ? 1 : 0;
   }
 
   if (subcommand === "doctor") {
@@ -664,7 +724,7 @@ async function runMemory(options) {
     return results.some((result) => !result.ok) ? 1 : 0;
   }
 
-  throw new Error(`Unknown memory subcommand: ${subcommand}; use add, list, search, review, harvest, index, install, uninstall, sync, or doctor.`);
+  throw new Error(`Unknown memory subcommand: ${subcommand}; use add, list, search, review, harvest, index, install, uninstall, sync, doctor, recap, close, or reopen.`);
 }
 
 async function runSlack(options) {
