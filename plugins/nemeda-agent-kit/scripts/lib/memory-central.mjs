@@ -91,17 +91,25 @@ export function personalHome(environment = process.env) {
 // say so, never the value in any message.
 export function resolveCentralToken(root, settings, environment = process.env) {
   const name = settings?.tokenVariable || DEFAULT_TOKEN_VARIABLE;
-  if (environment[name]) return { token: environment[name], source: "environment", variable: name };
+  const { value, source } = resolvePersonalVariable(root, name, environment);
+  return { token: value, source, variable: name };
+}
+
+// One personal secret by variable name, in the same order as the token:
+// the process environment, ~/.nemeda/.env.local, the workspace .env.local.
+// Also used for the administrators' connection string (memory-psql.mjs).
+export function resolvePersonalVariable(root, name, environment = process.env) {
+  if (environment[name]) return { value: environment[name], source: "environment" };
   const home = personalHome(environment);
   const personal = {};
   loadEnvLocal(home, personal);
-  if (personal[name]) return { token: personal[name], source: path.join(home, ENV_LOCAL_NAME), variable: name };
+  if (personal[name]) return { value: personal[name], source: path.join(home, ENV_LOCAL_NAME) };
   if (root) {
     const workspace = {};
     loadEnvLocal(root, workspace);
-    if (workspace[name]) return { token: workspace[name], source: path.join(root, ENV_LOCAL_NAME), variable: name };
+    if (workspace[name]) return { value: workspace[name], source: path.join(root, ENV_LOCAL_NAME) };
   }
-  return { token: null, source: null, variable: name };
+  return { value: null, source: null };
 }
 
 // Warns when the file holding the token is readable by other users (POSIX
@@ -299,7 +307,7 @@ function noServiceCheck(settings) {
     status: settings.urlVariable ? "warn" : "fail",
     code: "memory-central",
     message: settings.urlVariable
-      ? "memory.central has only urlVariable (direct database access); the --via psql transport is not implemented yet, so nothing can reach central memory. Add memory.central.mcpUrl."
+      ? "memory.central has only urlVariable: administrators can `memory sync --via psql`, but search, the normal sync, and the agents' central tools need memory.central.mcpUrl."
       : "memory.central.mcpUrl is missing or invalid."
   };
 }

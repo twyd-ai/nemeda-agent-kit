@@ -387,6 +387,9 @@ function validateMemory(memory, issues) {
           issues.push({ level: "error", code: "invalid-memory", message: `memory.central.${field} must be a non-empty string when present.` });
         }
       }
+      if (typeof memory.central.schema === "string" && memory.central.schema.trim() && !/^[a-z_][a-z0-9_]*$/.test(memory.central.schema)) {
+        issues.push({ level: "error", code: "invalid-memory", message: "memory.central.schema must be a plain lower-case PostgreSQL identifier (e.g. nemeda_memory)." });
+      }
       if (memory.central.promote !== undefined && !MEMORY_PROMOTE_VALUES.includes(memory.central.promote)) {
         issues.push({ level: "error", code: "invalid-memory", message: `memory.central.promote must be one of: ${MEMORY_PROMOTE_VALUES.join(", ")}.` });
       }

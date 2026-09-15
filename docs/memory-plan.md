@@ -1,7 +1,7 @@
 # Knowledge memory plan
 
 Status: project layer implemented (phases 1a–1b-iii, see "Phases"); central
-layer client implemented (phases 3a–3b), `--via psql` pending. Target release: 0.4.0 (project layer), 0.5.0 (central
+layer client implemented (phases 3a–3c). Target release: 0.4.0 (project layer), 0.5.0 (central
 layer). Supersedes `airtable.knowledgeLog`. The central database and its
 service are designed in [central-memory-plan.md](central-memory-plan.md).
 
@@ -149,9 +149,12 @@ npm packages:
   credentials.
 - **`psql`, for administrators only** (`memory sync --via psql`). The kit
   shells out to the `psql` CLI (`child_process`, exactly like `gh`,
-  `ffmpeg`, or `whisper-cli`): `psql "$NEMEDA_MEMORY_DB_URL" -At -F $'\x1f'
-  -v ON_ERROR_STOP=1 -c "..."` with parameters passed through `-v`
-  variables, never string-built. This is the break-glass path when the
+  `ffmpeg`, or `whisper-cli`; `scripts/lib/memory-psql.mjs`). The
+  connection string never reaches a command line: it is split into
+  libpq's `PG*` variables for the child only. Rows travel on stdin as one
+  JSON document in a dollar-quoted literal whose tag is checked absent
+  from the payload, unpacked server-side with `jsonb_to_recordset`, so no
+  value is ever string-built into SQL. This is the break-glass path when the
   service is down, and the way to backfill; it needs a personal writer role
   and `psql` on `PATH`.
 
@@ -568,7 +571,7 @@ nemeda-agent memory review [ID] [--all] [--json]                            # sh
 nemeda-agent memory harvest [--session ID] [--dry-run] [--json]        # shipped; no flag = every closed session
 nemeda-agent memory install [--interval M] | uninstall              # shipped; launchd / systemd user timer / Task Scheduler
 nemeda-agent memory index [--rebuild] [--json]                         # shipped; status, or --rebuild to force
-nemeda-agent memory sync [--all] [--dry-run] [--via service|psql]      # shipped through the service; --via psql pending (3c)
+nemeda-agent memory sync [--all] [--dry-run] [--via service|psql]      # shipped; --via psql for administrators
 nemeda-agent memory close [--host H] [--dry-run | --yes]               # shipped: closure digest + sync of every author
 nemeda-agent memory reopen [--dry-run | --yes]                         # shipped: reopen digest + sync
 nemeda-agent memory recap --period P [--host H] [--dry-run]            # shipped: project scope (central recaps are the service's job)
@@ -612,10 +615,14 @@ nemeda-agent memory doctor [--json]                                    # shipped
   `POST /promote` payloads, so batching, idempotency (an "already existed"
   answer marks the entry promoted), and the closure digest are covered
   without a network;
-- sync `--via psql`: `NEMEDA_PSQL_BIN` pointing at a stub script that
-  records the SQL it receives and returns canned rows, so parameter
-  passing, the `entries_current` fallback, and the version check are
-  covered without a database;
+- sync `--via psql` (`tests/memory-psql.test.mjs`): `NEMEDA_PSQL_BIN`
+  pointing at a stub that records its arguments, stdin, and `PG*`
+  variables and answers like the database, so the secret-handling rules,
+  the payload quoting, per-row unknown projects, the version check, and
+  the grants rows are covered without a database; plus one test, skipped
+  unless `NEMEDA_PSQL_TEST_URL` is set, against a real database built with
+  the service's own bootstrap and migrations (run by hand in Docker for
+  phase 3c: inserts, idempotency, unknown project, exact grants);
 - import: mapping from a canned Airtable payload, re-run skips duplicates;
 - ledger hook: cwd filter, idle detection, sub-second budget, detached spawn
   never blocks;
@@ -700,8 +707,15 @@ migration there, and a major change bumps `meta.schema_version`.
      `SessionStart` at most every 12 h once `mcpUrl` and a token exist
      (`MEMORY_SYNC_AUTO=false` turns it off, log in
      `.nemeda/state/memory-sync.log`).
-   - **3c, pending**: `memory sync --via psql` with the `memory-psql` and
-     `memory-grants` doctor rows. Remove `airtable.knowledgeLog`.
+   - **3c, done**: `memory sync --via psql` (`scripts/lib/memory-psql.mjs`)
+     behind the same transport interface as the service, as the
+     administrator's own writer role with `promoted_by` from their git
+     email; the `memory-psql` (binary, connection, contract version) and
+     `memory-grants` (exactly SELECT on the contract and INSERT on
+     entries/digests; warns on anything broader) rows in `memory doctor`;
+     `memory.central.schema` validated as a plain identifier. Removing
+     `airtable.knowledgeLog` waits for `import-airtable` (1b-iv), so
+     existing Knowledge Logs can be migrated first.
 4. **RAG** (outside the kit): embeddings and hybrid search live in the
    database and the service from the start (central-memory-plan.md); the kit
    only surfaces the service's read-only tools through `workspace-context`

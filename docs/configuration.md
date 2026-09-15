@@ -637,8 +637,17 @@ database: people authenticate to the service with a personal token.
   runs `scripts/register-projects.sh` there).
 - `promote`: `reviewed` (default) sends only reviewed entries; `all` sends
   pending ones too.
-- `urlVariable`, `schema`: direct database access for administrators
-  (`memory sync --via psql`, not implemented yet).
+- `urlVariable`, `schema`: direct database access for administrators.
+  `urlVariable` names the variable holding your personal connection
+  string (`postgresql://you:…@host:5432/memoria_central?sslmode=require`,
+  a login role in `nemeda_memory_writer`), looked up like the token; never
+  commit it. `nemeda-agent memory sync --via psql` then writes the
+  database directly — for backfills, or when the service is down — with
+  your git email as `promoted_by`. It needs `psql` on `PATH`
+  (`NEMEDA_PSQL_BIN` overrides it); the connection string is passed to
+  it through the environment, never on the command line. `memory doctor`
+  adds `memory-psql` (connection and contract version) and
+  `memory-grants` (warns when the role can do more than the kit needs).
 
 `nemeda-agent memory sync` sends your latest reviewed revisions to the
 service (`POST /promote`); `--all` includes every author's, `--dry-run` only

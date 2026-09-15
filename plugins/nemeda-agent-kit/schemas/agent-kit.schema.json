@@ -401,8 +401,9 @@
             },
             "schema": {
               "type": "string",
-              "minLength": 1,
-              "default": "nemeda_memory"
+              "pattern": "^[a-z_][a-z0-9_]*$",
+              "default": "nemeda_memory",
+              "description": "Administrators only (memory sync --via psql): the PostgreSQL schema holding the contract tables."
             },
             "projectId": {
               "type": "string",

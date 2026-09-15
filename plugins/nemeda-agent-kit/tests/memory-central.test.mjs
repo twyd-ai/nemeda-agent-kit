@@ -274,7 +274,7 @@ test("memory sync, search --central, and doctor work through the real CLI", asyn
     assert.equal(codes["memory-central-project"], "pass");
     assert.equal(codes["memory-sync"], "pass");
 
-    await assert.rejects(run(["memory", "sync", "--via", "psql"]), (error) => /not implemented yet/.test(error.stderr));
+    await assert.rejects(run(["memory", "sync", "--via", "psql"]), (error) => /urlVariable is not set/.test(error.stderr));
   } finally {
     await stub.close();
   }

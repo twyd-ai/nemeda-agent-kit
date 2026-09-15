@@ -100,7 +100,7 @@ Usage:
   nemeda-agent memory index [--rebuild] [--json]
   nemeda-agent memory install [--interval MINUTES] [--dry-run] [--json]
   nemeda-agent memory uninstall [--dry-run] [--json]
-  nemeda-agent memory sync [--all] [--dry-run] [--json]
+  nemeda-agent memory sync [--all] [--via service|psql] [--dry-run] [--json]
   nemeda-agent memory doctor [--json]
   nemeda-agent memory recap --period PERIOD [--host claude|codex] [--dry-run] [--json]
   nemeda-agent memory close [--host claude|codex] [--dry-run | --yes] [--json]
@@ -193,7 +193,10 @@ Commands:
                        --all includes every author's, --dry-run only lists
                        them. Idempotent. Needs memory.central.mcpUrl and
                        your token (memory.central.tokenVariable, default
-                       NEMEDA_MEMORY_TOKEN) in ~/.nemeda/.env.local
+                       NEMEDA_MEMORY_TOKEN) in ~/.nemeda/.env.local.
+                       --via psql (administrators) writes the database
+                       directly with the connection string named by
+                       memory.central.urlVariable, as your own writer role
              doctor    the memory checks, plus the online central ones:
                        service reachable, contract version, token accepted,
                        project registered, entries waiting for sync
@@ -552,13 +555,9 @@ async function runMemory(options) {
   }
 
   if (subcommand === "sync") {
-    if (options.via && options.via !== "service") {
-      throw new Error(options.via === "psql"
-        ? "memory sync --via psql (direct database access, administrators only) is not implemented yet; the memory service is the default transport."
-        : `Unknown --via ${options.via}; use service (default) or psql.`);
-    }
+    if (options.via && !["service", "psql"].includes(options.via)) throw new Error(`Unknown --via ${options.via}; use service (default) or psql.`);
     const { describeSyncError, syncToCentral } = await import("./lib/memory-sync.mjs");
-    const report = await syncToCentral(context.root, context.config, { dryRun: Boolean(options.dryRun), all: Boolean(options.all) });
+    const report = await syncToCentral(context.root, context.config, { dryRun: Boolean(options.dryRun), all: Boolean(options.all), via: options.via || "service" });
     if (options.json) {
       print(report, true);
       return report.errors.length ? 1 : 0;
@@ -610,6 +609,8 @@ async function runMemory(options) {
     if (context.config.memory.central) {
       // The online rows supersede the offline memory-central row.
       checks = [...checks.filter((check) => check.code !== "memory-central"), ...(await central.centralDoctorChecks(context.root, context.config))];
+      const { psqlDoctorChecks } = await import("./lib/memory-psql.mjs");
+      checks.push(...psqlDoctorChecks(context.root, context.config));
       const settings = central.centralSettings(context.config);
       const { promotableEntries, readSyncState } = await import("./lib/memory-sync.mjs");
       const state = readSyncState(context.root);

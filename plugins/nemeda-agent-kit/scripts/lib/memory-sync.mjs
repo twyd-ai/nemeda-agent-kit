@@ -11,6 +11,7 @@ import { fileURLToPath } from "node:url";
 import { latestRevisions, readAllJournals, resolveAuthorEmail } from "./memory.mjs";
 import { CentralError, centralSettings, promoteBatch, requireCentralToken, resolveCentralToken } from "./memory-central.mjs";
 import { readDigests } from "./memory-digest.mjs";
+import { checkSchemaVersion, promoteViaPsql, psqlConnection } from "./memory-psql.mjs";
 
 // Matches the service's per-request limit.
 export const PROMOTE_BATCH_SIZE = 200;
@@ -104,18 +105,52 @@ export function promotableEntries(entries, { promote = "reviewed", author, state
     .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
 }
 
+// The two ways to promote, with one interface: `endpoint` for reports, and
+// `open()`, which checks credentials (only when something is actually sent)
+// and returns an async function taking { entries, digests } and answering in
+// the POST /promote shape.
+function serviceTransport(root, settings, environment, fetchImpl) {
+  if (!settings.baseUrl) {
+    throw new CentralError("no-service", "memory.central.mcpUrl is not set; promotion goes through the memory service (administrators can use `--via psql`).");
+  }
+  return {
+    endpoint: `${settings.baseUrl}/promote`,
+    open() {
+      const token = requireCentralToken(root, settings, environment);
+      return (payload) => promoteBatch(settings, token, payload, fetchImpl ? { fetchImpl } : {});
+    }
+  };
+}
+
+// Administrators only: the contract tables directly, as the person's own
+// writer role, with promoted_by from their git email.
+function psqlTransport(root, settings, environment) {
+  if (!settings.urlVariable) {
+    throw new CentralError("psql-config", "memory.central.urlVariable is not set; `--via psql` needs the name of the variable holding an administrator's connection string.");
+  }
+  return {
+    endpoint: `psql (${settings.urlVariable})`,
+    open() {
+      const connection = psqlConnection(root, settings, environment);
+      const promotedBy = resolveAuthorEmail(root);
+      if (!promotedBy) throw new Error("git config user.email is not set; `--via psql` records it as promoted_by.");
+      checkSchemaVersion(connection, { environment });
+      return async (payload) => promoteViaPsql(connection, { ...payload, promotedBy }, { environment });
+    }
+  };
+}
+
 // Runs one sync. By default only this machine's author's entries are sent
 // (the person promoting vouches for them and appears as promoted_by);
-// `all` sends every author's, which is what `memory close` needs. Throws a
-// CentralError for problems that stop the whole run (no service, no token,
-// unreachable, 401/403); per-row refusals come back in `errors` and those
+// `all` sends every author's, which is what `memory close` needs. `via` is
+// "service" (default) or "psql" (administrators). Throws a CentralError for
+// problems that stop the whole run (no service, no token, unreachable,
+// 401/403, psql failure); per-row refusals come back in `errors` and those
 // rows are retried by the next sync.
-export async function syncToCentral(root, config, { environment = process.env, fetchImpl, dryRun = false, all = false, now = () => new Date() } = {}) {
+export async function syncToCentral(root, config, { environment = process.env, fetchImpl, dryRun = false, all = false, via = "service", now = () => new Date() } = {}) {
   const settings = centralSettings(config);
   if (!settings) throw new Error("No memory.central section in .nemeda/agent-kit.json; see docs/memory-plan.md, \"Configuration\".");
-  if (!settings.baseUrl) {
-    throw new CentralError("no-service", "memory.central.mcpUrl is not set; promotion goes through the memory service (`--via psql` for administrators is not implemented yet).");
-  }
+  const transport = via === "psql" ? psqlTransport(root, settings, environment) : serviceTransport(root, settings, environment, fetchImpl);
   const author = all ? undefined : resolveAuthorEmail(root);
   if (!all && !author) throw new Error("git config user.email is not set; the kit promotes your own entries by default (or pass --all).");
 
@@ -125,7 +160,8 @@ export async function syncToCentral(root, config, { environment = process.env, f
   const candidates = promotableEntries(entries, { promote: settings.promote, author, state });
   const digestCandidates = promotableDigests(readDigests(memoryRoot).digests, { author, state });
   const report = {
-    endpoint: `${settings.baseUrl}/promote`,
+    endpoint: transport.endpoint,
+    via,
     projectId: settings.projectId,
     scope: all ? "all authors" : author,
     promote: settings.promote,
@@ -142,7 +178,7 @@ export async function syncToCentral(root, config, { environment = process.env, f
   };
   if (dryRun || (candidates.length === 0 && digestCandidates.length === 0)) return report;
 
-  const token = requireCentralToken(root, settings, environment);
+  const promote = transport.open();
   state.lastAttemptAt = now().toISOString();
   const sent = new Map(candidates.map((entry) => [entry.id, entry.revision]));
   const acknowledge = (item) => {
@@ -154,7 +190,7 @@ export async function syncToCentral(root, config, { environment = process.env, f
   try {
     for (let start = 0; start < candidates.length; start += PROMOTE_BATCH_SIZE) {
       const batch = candidates.slice(start, start + PROMOTE_BATCH_SIZE);
-      const answer = await promoteBatch(settings, token, { entries: batch.map((entry) => entryToContractRow(entry, settings.projectId)) }, fetchImpl ? { fetchImpl } : {});
+      const answer = await promote({ entries: batch.map((entry) => entryToContractRow(entry, settings.projectId)) });
       for (const item of answer.entries.inserted) if (acknowledge(item)) report.inserted.push({ id: item.id, revision: item.revision });
       for (const item of answer.entries.existing) if (acknowledge(item)) report.existing.push({ id: item.id, revision: item.revision });
       report.errors.push(...answer.errors);
@@ -172,7 +208,7 @@ export async function syncToCentral(root, config, { environment = process.env, f
     };
     for (let start = 0; start < digestCandidates.length; start += PROMOTE_BATCH_SIZE) {
       const batch = digestCandidates.slice(start, start + PROMOTE_BATCH_SIZE);
-      const answer = await promoteBatch(settings, token, { digests: batch.map((digest) => digestToContractRow(digest, settings.projectId)) }, fetchImpl ? { fetchImpl } : {});
+      const answer = await promote({ digests: batch.map((digest) => digestToContractRow(digest, settings.projectId)) });
       for (const item of answer.digests.inserted) {
         const id = acknowledgeDigest(item);
         if (id) report.digests.inserted.push(id);
@@ -185,7 +221,7 @@ export async function syncToCentral(root, config, { environment = process.env, f
       state.lastSyncAt = now().toISOString();
       writeSyncState(root, state);
     }
-    state.lastError = report.errors.length ? `${report.errors.length} row(s) refused by the service` : null;
+    state.lastError = report.errors.length ? `${report.errors.length} row(s) refused (${via})` : null;
     writeSyncState(root, state);
   } catch (error) {
     state.lastError = error instanceof Error ? error.message : String(error);
