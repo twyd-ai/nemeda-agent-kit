@@ -322,13 +322,13 @@ test("the MCP server proxies the read-only central tools only with --central-pro
     const proxied = await callMcp(["--central-proxy"], env, [
       { jsonrpc: "2.0", id: 1, method: "initialize", params: {} },
       { jsonrpc: "2.0", id: 2, method: "tools/list", params: {} },
-      { jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "memory_central_search", arguments: { cwd: root, query: "bge", k: 3 } } }
+      { jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "memory_central_search", arguments: { cwd: root, query: "bge", limit: 3, include_pending: true } } }
     ]);
     const names = proxied.get(2).result.tools.map((tool) => tool.name);
     assert.ok(names.includes("memory_central_search"));
     assert.ok(names.includes("memory_central_whoami"));
     assert.equal(names.includes("memory_central_promote"), false);
-    assert.deepEqual(JSON.parse(proxied.get(3).result.content[0].text).arguments, { query: "bge", k: 3 });
+    assert.deepEqual(JSON.parse(proxied.get(3).result.content[0].text).arguments, { query: "bge", limit: 3, include_pending: true });
 
     const plain = await callMcp([], env, [
       { jsonrpc: "2.0", id: 1, method: "initialize", params: {} },

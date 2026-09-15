@@ -165,7 +165,7 @@ agreed with the service, which implements it in its phase 2). The base URL is
 | `GET /health` | `memory doctor` | `{ service, version, contractVersion, embeddings: { status, pending } }`; the kit refuses a `contractVersion` major it does not know |
 | `GET /whoami` | `memory doctor` | `{ email, projects, canPromote }`; 401 when the token is missing or invalid |
 | `POST /promote` | `memory sync`, `memory close` | body `{ entries: [contract rows], digests: [contract rows] }` without `promoted_at`/`promoted_by`, at most 200 rows; answer `{ entries: { inserted, existing }, digests: { inserted, existing }, errors: [{ id, revision, code, message }] }`; per-row errors (`unknown-project`, `forbidden-project`, `invalid`) never abort the batch; 403 when the account may not promote |
-| `POST /mcp` | the stdio proxy, `memory search --central`, `memory doctor` | Streamable HTTP: `initialize` (keeping `Mcp-Session-Id` when assigned), `notifications/initialized`, `tools/call`; JSON or SSE answers |
+| `POST /mcp` | the stdio proxy, `memory search --central`, `memory doctor` | Streamable HTTP: `initialize` (keeping `Mcp-Session-Id` when assigned), `notifications/initialized`, `tools/call`; JSON or SSE answers (the service is stateless and assigns no session id). `memory_central_search` takes `query`, `projects`, `types`, `since`, `limit`, `include_pending` and answers with `mode: "hybrid" \| "text-only"` |
 
 The tables below are the contract both transports rely on: the service
 queries them, and `--via psql` writes them directly.

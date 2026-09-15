@@ -120,7 +120,8 @@ const centralTools = [
         projects: { type: "array", items: { type: "string" }, description: "Restrict to these central project ids." },
         types: { type: "array", items: { type: "string", enum: ["ai-interaction", "decision", "finding", "meeting"] }, description: "Restrict to these entry types." },
         since: { type: "string", description: "Only entries on or after this date (YYYY-MM-DD)." },
-        k: { type: "integer", minimum: 1, description: "How many results to return." }
+        limit: { type: "integer", minimum: 1, description: "How many results to return." },
+        include_pending: { type: "boolean", description: "Also return entries not yet reviewed (default: reviewed only)." }
       },
       required: ["query"],
       additionalProperties: false
