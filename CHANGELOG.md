@@ -11,7 +11,7 @@ shared, first inside each project and then across the company.
 - **Microsoft OneDrive and SharePoint** as an alternative to Google Drive
   for `drive.links`: a provider registry, mount detection on macOS, Windows,
   and Linux, library matching, and doctor checks
-  ([onedrive-plan.md](docs/onedrive-plan.md)).
+  ([drive-setup.md](docs/drive-setup.md)).
 - **Meeting capture**: finished recordings (OBS or any folder) are
   transcribed locally — whisper.cpp, or Apple's speech engine on macOS 26 —
   and filed under the project's transcripts; recorder and transcriber roles
@@ -37,6 +37,9 @@ shared, first inside each project and then across the company.
 
 ### Changed
 
+- The kit now lives at `twyd-ai/nemeda-agent-kit`: install commands, the
+  organization marketplace, and every manifest's `repository`/`homepage`
+  point there.
 - `nemeda-agent memory add --json` accepts `"status": "reviewed"`, and the
   `memory-log` skill uses it: an entry the person confirmed is reviewed.
 

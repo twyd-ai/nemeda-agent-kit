@@ -6,7 +6,7 @@
   "author": "Nemeda",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/marcnaa/nemeda-agent-kit.git",
+    "url": "git+https://github.com/twyd-ai/nemeda-agent-kit.git",
     "directory": "plugins/nemeda-agent-kit"
   },
   "description": "Portable methodology, tools, and repository context for AI coding agents.",

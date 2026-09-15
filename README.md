@@ -98,7 +98,7 @@ project instructions stay in `AGENTS.md`.
 ### Codex
 
 ```bash
-codex plugin marketplace add marcnaa/nemeda-agent-kit
+codex plugin marketplace add twyd-ai/nemeda-agent-kit
 ```
 
 Open `/plugins`, select **Nemeda Agent Kit**, install `nemeda-agent-kit`, then
@@ -114,7 +114,7 @@ activates only inside kit-configured repositories.
 ### Claude Code
 
 ```bash
-claude plugin marketplace add marcnaa/nemeda-agent-kit
+claude plugin marketplace add twyd-ai/nemeda-agent-kit
 claude plugin install nemeda-agent-kit@nemeda-agent-kit
 ```
 
@@ -123,7 +123,7 @@ Run `/reload-plugins` or start a new session.
 ### Claude Desktop organization marketplace
 
 In **Organization settings → Plugins → Add plugin → GitHub**, enter
-`marcnaa/nemeda-agent-kit` in `owner/repo` form. Managed sync uses a GitHub App
+`twyd-ai/nemeda-agent-kit` in `owner/repo` form. Managed sync uses a GitHub App
 installation token; automatic sync additionally requires repository admin
 access and the App's Webhooks read/write permission.
 

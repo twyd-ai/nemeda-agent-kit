@@ -6,8 +6,8 @@
     "name": "Marc Noguera",
     "url": "https://github.com/marcnaa"
   },
-  "homepage": "https://github.com/marcnaa/nemeda-agent-kit",
-  "repository": "https://github.com/marcnaa/nemeda-agent-kit",
+  "homepage": "https://github.com/twyd-ai/nemeda-agent-kit",
+  "repository": "https://github.com/twyd-ai/nemeda-agent-kit",
   "keywords": ["agents", "codex", "claude", "mcp", "workspace"],
   "skills": "./skills/"
 }

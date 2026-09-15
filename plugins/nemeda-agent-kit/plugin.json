@@ -8,7 +8,7 @@
     "url": "https://github.com/marcnaa"
   },
   "license": "Apache-2.0",
-  "homepage": "https://github.com/marcnaa/nemeda-agent-kit",
-  "repository": "https://github.com/marcnaa/nemeda-agent-kit",
+  "homepage": "https://github.com/twyd-ai/nemeda-agent-kit",
+  "repository": "https://github.com/twyd-ai/nemeda-agent-kit",
   "keywords": ["agents", "mcp", "workspace", "methodology"]
 }
