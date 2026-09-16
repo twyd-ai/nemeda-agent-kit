@@ -518,7 +518,12 @@ to run. Full design, storage rationale, and the central-database layer in
 `nemeda-agent memory add` appends one entry (`--type`, `--title`, `--tags`,
 the prose summary on stdin, or the whole entry as JSON with `--json`),
 `memory list` and `memory search "query"` read every author's journal.
-Entries are attributed to `git config user.email`; `nemeda-agent doctor`
+Entries are attributed to `NEMEDA_MEMORY_AUTHOR` when it is set (in the
+environment or `~/.nemeda/.env.local`, per person), otherwise to
+`git config user.email`. Set it when your git email is a GitHub noreply
+address: that email is the journal's file name and what teammates see in
+central memory, and `doctor` warns about it (`memory-author`). Use the same
+value on every machine. `nemeda-agent doctor`
 checks the folder resolves through Drive, this author's journal is
 writable, and flags sync-client conflict copies in `journal/`.
 

@@ -16,10 +16,10 @@
 // correct, used directly when no SQLite engine is available, and the
 // reference behaviour any accelerated index must match.
 
-import { execFileSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
+import { memoryAuthor } from "./memory-author.mjs";
 import { readWorkspaceContext } from "./workspace.mjs";
 
 export const ENTRY_TYPES = ["ai-interaction", "decision", "finding", "meeting"];
@@ -254,15 +254,13 @@ export function searchEntries(entries, query, filters = {}) {
     .map((result) => result.entry);
 }
 
-// Every entry is attributed to `git config user.email`, the same source the
-// Airtable Knowledge Log hooks used. Empty string (never throws) when git is
-// missing, unconfigured, or `root` is not a repository.
+// Every entry is attributed to the person's memory identity:
+// NEMEDA_MEMORY_AUTHOR when set (environment or ~/.nemeda/.env.local), else
+// `git config user.email` — see memory-author.mjs, the single source every
+// memory path uses. Empty string (never throws) when neither is available,
+// or when the override is not an email.
 export function resolveAuthorEmail(root) {
-  try {
-    return execFileSync("git", ["config", "user.email"], { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
-  } catch {
-    return "";
-  }
+  return memoryAuthor(root).email;
 }
 
 // A recordEntry(...) union of the entry types other kit features log

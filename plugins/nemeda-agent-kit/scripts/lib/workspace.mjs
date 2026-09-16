@@ -16,6 +16,7 @@ import { fileURLToPath } from "node:url";
 import { DRIVE_PROVIDERS, driveProvider, planDriveLinks } from "./drive.mjs";
 import { ENV_LOCAL_NAME, loadEnvLocal } from "./env.mjs";
 import { meetingDoctorChecks } from "./meetings-doctor.mjs";
+import { memoryAuthor, memoryAuthorCheck } from "./memory-author.mjs";
 import { centralOfflineChecks, serviceUrlProblem } from "./memory-central.mjs";
 
 export const CONFIG_RELATIVE_PATH = path.join(".nemeda", "agent-kit.json");
@@ -861,6 +862,7 @@ const JOURNAL_CONFLICT_PATTERN = /\(.*conflict|conflicted|\(\d+\)\.jsonl$/i;
 // is a validateConfig issue and already surfaces through the generic issues
 // loop above.
 function memoryDoctorChecks(root, memoryConfig, checks) {
+  checks.push(memoryAuthorCheck(root));
   const memoryRoot = path.join(root, memoryConfig.project.path);
   let folderStat = null;
   try {
@@ -879,7 +881,7 @@ function memoryDoctorChecks(root, memoryConfig, checks) {
 
     const journalDir = path.join(memoryRoot, "journal");
     if (existsSync(journalDir)) {
-      const authorEmail = runGit(root, ["config", "user.email"]);
+      const authorEmail = memoryAuthor(root).email;
       if (authorEmail) {
         const authorFile = path.join(journalDir, `${authorEmail}.jsonl`);
         if (!existsSync(authorFile)) {

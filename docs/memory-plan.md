@@ -344,6 +344,8 @@ proposes consistent ones.
 
 Machine-local: `NEMEDA_MEMORY_TOKEN` in `~/.nemeda/.env.local` (personal,
 for Codex, Cursor, and the CLI; Claude hosts use OAuth instead);
+`NEMEDA_MEMORY_AUTHOR` in the same file (the person's memory identity, used
+by every memory path instead of `git config user.email` when set);
 `NEMEDA_MEMORY_DB_URL` (administrators only, `--via psql`);
 `MEMORY_HARVEST=true` (replaces `KNOWLEDGE_LOG_AUTO`; see "Unattended capture");
 `NEMEDA_SQLITE_BIN` and `NEMEDA_PSQL_BIN` (overrides for the CLI engines).

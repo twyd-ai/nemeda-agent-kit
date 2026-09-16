@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- `NEMEDA_MEMORY_AUTHOR` (environment or `~/.nemeda/.env.local`): the email
+  every memory path attributes entries to, instead of `git config
+  user.email`, for people whose git email is a GitHub noreply address. The
+  new `memory-author` doctor row warns about a noreply identity.
+
+### Changed
+
+- The test suite points `NEMEDA_HOME` at a temporary directory, so it never
+  reads a developer's personal `~/.nemeda`.
+
 ## 0.4.0 — 2026-09-15
 
 The release that turns the kit from repository context into a working

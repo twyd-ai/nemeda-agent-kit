@@ -160,7 +160,8 @@ Commands:
            .nemeda/agent-kit.json; see docs/memory-plan.md).
              add       append one entry; the summary is read from stdin (or,
                        with --json, the whole entry as JSON on stdin), the
-                       author is always this machine's \`git config user.email\`
+                       author is NEMEDA_MEMORY_AUTHOR (environment or
+                       ~/.nemeda/.env.local) or else \`git config user.email\`
              list      list entries, newest first
              search    full-text search across every author's journal;
                        --central searches central memory through the
