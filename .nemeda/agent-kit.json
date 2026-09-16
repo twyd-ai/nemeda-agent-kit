@@ -13,6 +13,23 @@
     "instructions": ["AGENTS.md"],
     "documents": ["docs/architecture.md", "docs/configuration.md"]
   },
+  "drive": {
+    "provider": "google",
+    "sharedDrive": "Nemeda",
+    "links": {
+      ".nemeda/memory": "agent-kit/memory"
+    }
+  },
+  "memory": {
+    "project": {
+      "path": ".nemeda/memory",
+      "tags": ["architecture", "memory", "meetings", "drive", "mcp", "release", "security"]
+    },
+    "central": {
+      "mcpUrl": "https://memory.twyd.ai/mcp",
+      "projectId": "nemeda-agent-kit"
+    }
+  },
   "tools": {
     "required": ["git", "github", "node"],
     "optional": ["codex", "claude"]

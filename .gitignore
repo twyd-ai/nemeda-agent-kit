@@ -2,3 +2,7 @@
 node_modules/
 coverage/
 *.log
+
+# nemeda-agent-kit: machine-local paths (managed by `nemeda-agent setup`)
+.nemeda/state/
+.nemeda/memory
