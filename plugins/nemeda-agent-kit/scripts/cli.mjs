@@ -431,16 +431,6 @@ async function runMeeting(options) {
   throw new Error(`Unknown meeting subcommand: ${subcommand}; use process, list, notes, doctor, setup, watch, install, or uninstall.`);
 }
 
-async function promptLine(question) {
-  const { createInterface } = await import("node:readline/promises");
-  const reader = createInterface({ input: process.stdin, output: process.stdout });
-  try {
-    return await reader.question(question);
-  } finally {
-    reader.close();
-  }
-}
-
 async function readStdin() {
   if (process.stdin.isTTY) return "";
   let input = "";
@@ -624,35 +614,9 @@ async function runMemory(options) {
   }
 
   if (subcommand === "trust") {
-    const central = await import("./lib/memory-central.mjs");
-    const pins = await import("./lib/memory-pins.mjs");
-    const settings = central.centralSettings(context.config, { configSource: context.configSource });
-    // Without a central section only folder moves can need confirming.
-    const plan = settings
-      ? pins.describeCentralTrust(context.root, settings)
-      : { origin: null, projectId: context.config.project.id, configSource: context.configSource || "repository", changes: pins.pendingFolderChanges(context.root) };
-    if (options.trustUrl && pins.serviceOrigin(options.trustUrl) !== plan.origin) {
-      throw new Error(`This workspace uses ${plan.origin || "no service URL"}, not ${pins.serviceOrigin(options.trustUrl) || options.trustUrl}; trust the URL its configuration names, or change the configuration first.`);
-    }
-    console.log(`Workspace ${context.root} (${plan.configSource} configuration):`);
-    console.log(`  central memory service: ${plan.origin || "(none; --via psql only)"}`);
-    console.log(`  promotes to project:    ${plan.projectId}`);
-    if (!plan.changes.length) {
-      console.log("Already trusted; nothing to confirm.");
-      return 0;
-    }
-    for (const change of plan.changes) console.log(`  ${change.kind}: ${change.from || "(not trusted yet)"} -> ${change.to}`);
-    // Trusting decides where a person's token and a project's memory go, so
-    // it needs a person: an agent or a script has no interactive terminal.
-    if (!process.stdin.isTTY || !process.stdout.isTTY) {
-      throw new Error("memory trust needs a person at an interactive terminal: it decides where your token and this project's memory go, so an agent or a script cannot confirm it. Run it yourself in a terminal.");
-    }
-    const expected = plan.origin ? new URL(plan.origin).host : plan.projectId;
-    const answer = await promptLine(`Type ${expected} to trust it: `);
-    if (answer.trim() !== expected) throw new Error("Not confirmed; nothing changed.");
-    if (settings) pins.trustCentralPins(context.root, { mcpUrl: settings.mcpUrl, projectId: settings.projectId });
-    pins.trustPendingFolders(context.root);
-    console.log(`Trusted ${plan.changes.map((change) => change.kind).join(", ")} for this workspace; paused writers resume.`);
+    // One implementation of the human gate, shared with `init --from-drive`.
+    const { confirmWorkspaceTrust } = await import("./lib/memory-trust.mjs");
+    await confirmWorkspaceTrust(context.root, context.config, { configSource: context.configSource, url: options.trustUrl });
     return 0;
   }
 

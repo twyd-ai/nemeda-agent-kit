@@ -13,6 +13,8 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { CentralError, centralOfflineChecks, centralSettings, requireCentralToken, resolveCentralToken } from "../scripts/lib/memory-central.mjs";
 import { evaluateCentralPins, personalOriginsPath, trustCentralPins, workspacePinsPath } from "../scripts/lib/memory-pins.mjs";
+import { confirmWorkspaceTrust } from "../scripts/lib/memory-trust.mjs";
+import { PassThrough } from "node:stream";
 import { psqlConnection } from "../scripts/lib/memory-psql.mjs";
 import { syncToCentral } from "../scripts/lib/memory-sync.mjs";
 import { validateConfig } from "../scripts/lib/workspace.mjs";
@@ -137,6 +139,50 @@ test("sync refuses an untrusted origin before any request leaves the machine", a
   } finally {
     await stub.close();
   }
+});
+
+// A stand-in for a terminal: the real gate checks isTTY on the streams it is
+// given, which is exactly what an agent's or a script's pipes do not have.
+function fakeTerminal(answer) {
+  const input = new PassThrough();
+  const output = new PassThrough();
+  input.isTTY = true;
+  output.isTTY = true;
+  let printed = "";
+  output.on("data", (chunk) => {
+    printed += chunk;
+    if (answer !== undefined && printed.includes("to trust it: ")) {
+      input.write(`${answer}\n`);
+      answer = undefined;
+    }
+  });
+  return { input, output, printed: () => printed };
+}
+
+test("confirmWorkspaceTrust pins only after the person types the host, recording which command did it", async () => {
+  const environment = personalEnvironment();
+  const config = baseConfig({ mcpUrl: "https://memory.example.ts.net/mcp" });
+  const root = workspace(config);
+
+  const wrong = fakeTerminal("memory.example.com");
+  await assert.rejects(confirmWorkspaceTrust(root, config, { configSource: "drive", environment, input: wrong.input, output: wrong.output }), /Not confirmed/);
+  assert.equal(existsSync(workspacePinsPath(root)), false, "a wrong answer pins nothing");
+
+  const right = fakeTerminal("memory.example.ts.net");
+  const result = await confirmWorkspaceTrust(root, config, { configSource: "drive", via: "init --from-drive", environment, input: right.input, output: right.output });
+  assert.equal(result.trusted, true);
+  assert.match(right.printed(), /origin: \(not trusted yet\) -> https:\/\/memory\.example\.ts\.net/);
+  assert.equal(JSON.parse(readFileSync(workspacePinsPath(root), "utf8")).central.via, "init --from-drive");
+  assert.equal(resolveCentralToken(root, centralSettings(config, { configSource: "drive" }), environment).token, STUB_TOKEN);
+
+  const again = fakeTerminal();
+  assert.deepEqual(await confirmWorkspaceTrust(root, config, { configSource: "drive", environment, input: again.input, output: again.output }), { trusted: false, changes: [] });
+
+  const piped = new PassThrough();
+  await assert.rejects(
+    confirmWorkspaceTrust(workspace(config), config, { configSource: "drive", environment, input: piped, output: new PassThrough() }),
+    /needs a person at an interactive terminal/
+  );
 });
 
 test("memory trust refuses without a person at an interactive terminal", async () => {
