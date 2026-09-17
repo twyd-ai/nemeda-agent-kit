@@ -38,6 +38,9 @@ carries the short version.
      after the project, and sync its default document library, or share a
      personal OneDrive folder with the team ("Add shortcut to My files").
    The kit cannot do this through the filesystem either way.
+   If the project will keep memory on this drive, confirm the member list
+   has no client accounts and no link sharing: memory journals are internal.
+   A client that needs documents gets a separate folder or drive.
 2. **Grant access**: GitHub org membership for the code repos, and Airtable
    workspace access if using a plan base.
 
@@ -78,6 +81,16 @@ shows it.
 5. Run `nemeda-agent doctor` until everything relevant passes.
 6. Commit the workspace repository (config, AGENTS.md, .gitignore) and push it
    to the org, so teammates replicate with: clone + `nemeda-agent setup`.
+
+   When the project should have no repository of its own (the code
+   repositories are the client's, or there is nothing to commit beyond the
+   configuration), skip the commit: run `nemeda-agent config publish` in the
+   workspace folder instead. It moves the configuration and `AGENTS.md` to
+   the drive's `config/` folder and leaves a local pointer. Teammates then
+   create their own folder and run `nemeda-agent init --from-drive
+   "<shared drive>"`, then `setup` and `doctor`. Neither the agent nor a
+   script can trust the central memory service for them: each person runs
+   `nemeda-agent memory trust` at a terminal.
 
 ## 5. Hand-off message
 

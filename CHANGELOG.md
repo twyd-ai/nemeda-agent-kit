@@ -19,6 +19,14 @@
   is not mounted or a bad edit lands; `doctor` reports `config-source` and
   the cache, mismatch, and conflict-copy cases
   ([drive-config-plan.md](docs/drive-config-plan.md)).
+- `nemeda-agent config publish` moves a local configuration and its
+  `AGENTS.md` to the shared drive, replacing the local file with the pointer
+  only after the workspace reads the drive copy back; `nemeda-agent init
+  --from-drive "<shared drive>"` sets up a teammate's folder from it. At a
+  terminal both offer the `memory trust` confirmation when the workspace has
+  not pinned the central memory service yet; without one they never trust
+  it. Inside a Git
+  repository both keep `.nemeda/` out of it through `.git/info/exclude`.
 
 ### Changed
 

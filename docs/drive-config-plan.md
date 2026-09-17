@@ -3,8 +3,9 @@
 Status: approved by Miguel on 2026-09-17, after the memory session's review
 (token-resolution cut point, token-variable prefix, redirects, project pin,
 instruction change warnings, paused unattended writers, configuration
-readers on client drives). Phase 0 is done; the rest
-is not implemented.
+readers on client drives). Implemented: phases 0 to 3 (the move of the
+Scharlab and CTTC configurations to their drives is an operation, not
+code, and waits for Miguel).
 
 Today a workspace is configured by `.nemeda/agent-kit.json`, found by walking
 up from the working directory, and shared with the team through Git. That

@@ -195,16 +195,22 @@ function hasErrors(issues) {
 //   { ok: false, config, issues, configPath, source }
 // `validate` is workspace.mjs's validateConfig. `onPlaceholder: "cache"`
 // (the SessionStart hook) prefers the cache over a read that would block.
+// `pointer` (an object) replaces `pointerPath` when the pointer is not written
+// yet (`init --from-drive` reads the drive copy before creating it), and
+// `allowCache: false` reports the drive copy's problems instead of falling
+// back to a cached copy.
 export function loadDriveConfig({
   root,
   pointerPath,
+  pointer = null,
   validate,
   environment = process.env,
   platform = process.platform,
   onPlaceholder = "read",
-  isPlaceholder = isPlaceholderFile
+  isPlaceholder = isPlaceholderFile,
+  allowCache = true
 }) {
-  const pointerJson = readJson(pointerPath);
+  const pointerJson = pointer ? { value: pointer, error: null } : readJson(pointerPath);
   if (pointerJson.error) {
     return { ok: false, config: null, configPath: null, source: null, issues: [{ level: "error", code: "invalid-config-link", message: `${CONFIG_LINK_RELATIVE_PATH}: ${pointerJson.error}` }] };
   }
@@ -212,7 +218,7 @@ export function loadDriveConfig({
   if (hasErrors(pointerIssues)) return { ok: false, config: null, configPath: null, source: null, issues: pointerIssues };
 
   const source = pointerSource(pointerJson.value);
-  const cache = readConfigCache(root);
+  const cache = allowCache ? readConfigCache(root) : null;
   const usableCache = cache && sameSource(cache.source, source) ? cache : null;
 
   // A per-project NEMEDA_DRIVE_ROOT in the workspace .env.local must work, but

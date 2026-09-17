@@ -112,6 +112,19 @@ are read by every AI session at start, so `nemeda-agent doctor` warns
 undownloaded files — right-click the folder and choose **Always keep on this
 device**.
 
+## Project memory, configuration, and client accounts
+
+A project's shared drive can hold its memory journals and, with
+`nemeda-agent config publish`, its configuration
+([configuration.md](configuration.md#configuration-on-the-shared-drive)).
+Both are internal: the journals keep the summaries that are not meant for
+the client. When you create the memory folder, open the drive's member list
+(Google Drive: Manage members; SharePoint: Site permissions) and confirm it
+has no client accounts and no link sharing. If a client ever needs access to
+project documents, share a separate folder or drive with them and move the
+memory and the configuration away first. The kit cannot read drive
+membership, so this check is yours.
+
 ## Verifying
 
 ```bash

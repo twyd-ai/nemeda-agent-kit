@@ -1,6 +1,8 @@
 # Repository configuration
 
-The canonical file is `.nemeda/agent-kit.json`.
+The canonical file is `.nemeda/agent-kit.json`. It lives in the workspace
+itself, or on the project's shared drive with a local pointer; see
+[Configuration on the shared drive](#configuration-on-the-shared-drive).
 
 ## Single repository
 
@@ -753,10 +755,100 @@ promote with `nemeda-agent memory sync --all --dry-run` and
 section (`nemeda-agent doctor` reports it); it will be removed once the
 central layer ships.
 
+## Configuration on the shared drive
+
+For a project whose code repositories must not be touched (a client's), or
+that has several of them, the configuration can live on the project's shared
+drive instead of in a repository. Each person's workspace folder then holds
+only a pointer, `.nemeda/agent-kit.link.json`, and every teammate reads the
+same file. Design, threat model, and decisions in
+[drive-config-plan.md](drive-config-plan.md).
+
+```json
+{
+  "schemaVersion": 1,
+  "source": { "provider": "google", "sharedDrive": "Acme-Workspace", "path": "config/agent-kit.json" }
+}
+```
+
+- `sharedDrive` and `provider` mean what they mean in `drive`; `path` is
+  inside the drive and defaults to `config/agent-kit.json`. The drive copy
+  must declare the same `drive.provider` and `drive.sharedDrive`, or it is
+  refused (`config-mismatch`), which catches a file copied from another
+  project.
+- The workspace root is still the local folder holding `.nemeda/`, so every
+  path in the configuration resolves there, exactly as before. The usual
+  layout is a plain folder with the pointer and the code repositories cloned
+  inside it by `nemeda-agent setup`.
+- A full `.nemeda/agent-kit.json` in the same folder wins over a pointer, and
+  `doctor` warns (`config-both`).
+- `context.instructions` are read next to the drive copy first (a shared
+  `AGENTS.md` in the drive's `config/` folder), then from the local folder.
+  The session context marks them as coming from the shared drive, and a
+  change since the last session on this machine raises
+  `config-instructions`, because they are injected into every session.
+- The last good copy, with its drive instructions, is kept in
+  `.nemeda/state/config-cache.json`. When the drive is not mounted, the file
+  is not downloaded yet at session start, or a bad edit lands on the drive,
+  the kit uses that copy and says why (`config-cache`). With no cached copy,
+  the session context says the configuration could not be read and every
+  command reports the reason.
+- `doctor` reports where the configuration came from (`config-source`),
+  sync-client conflict copies next to the drive file (`config-conflict`),
+  and does not ask a drive-hosted folder to be a Git repository.
+
+Who edits the drive's `config/` folder can change where content goes and
+which instructions every session loads. Restrict edit rights on it to the
+project leads where the provider allows per-folder permissions. The kit
+also guards the sensitive parts itself: the central memory service and
+project are only trusted through `memory trust`, and a moved memory or
+meetings folder pauses unattended writers (see Central memory).
+
+**Where the memory and the configuration may live.** Project memory holds
+internal summaries, so `memory.project.path` must sit on a drive that has no
+client accounts as members, and the configuration goes wherever the memory
+goes, or somewhere more restricted. By default both use the project's own
+drive; check its members when you create the memory folder, and move the
+memory elsewhere before a client is ever added. The kit cannot see drive
+membership, so `doctor` cannot check this for you.
+
+### Commands
+
+```bash
+nemeda-agent config publish --dry-run           # what would move
+nemeda-agent config publish                     # asks, then moves it
+nemeda-agent init --from-drive "Acme-Workspace" --dry-run
+nemeda-agent init --from-drive "Acme-Workspace" # asks, then writes the pointer
+```
+
+- `config publish` moves an existing local `.nemeda/agent-kit.json` (it
+  needs a `drive` section) and its instruction files to the drive. It refuses
+  a different configuration already there, a differing `AGENTS.md`, and a
+  configuration file tracked by Git. The local file is replaced by the
+  pointer only after the drive copy reads back identical and the workspace
+  loads it from the drive; otherwise the local file is restored. The previous
+  file is kept at `.nemeda/state/agent-kit.local-backup.json`, and
+  `.nemeda/state/` and the `.nemeda/memory` link are left as they were.
+  Central memory trust carries over only when the workspace had already
+  pinned the same service and project; otherwise nothing is sent until a
+  person confirms it, which `config publish` offers at a terminal (the same
+  confirmation as `memory trust`) and the next steps repeat.
+- `init --from-drive` shows what the drive copy declares (project, sections,
+  instructions, central memory service) before writing the pointer. At a
+  terminal it then offers to trust the central memory service, with the same
+  confirmation as `memory trust` (you type the service host). Without a
+  terminal it needs `--yes` and never trusts anything; run `memory trust`
+  yourself afterwards. `--provider onedrive` and `--path` match a pointer
+  that is not the default.
+- When the workspace folder is inside a Git repository, both commands add
+  the `.nemeda/` folder to `.git/info/exclude`, which is never committed, so
+  a client repository shows no change.
+
 ## Rules
 
 - Paths are relative to the directory containing `.nemeda/`.
-- Instruction files must resolve inside that directory tree.
+- Instruction files must resolve inside that directory tree, or inside the
+  folder holding a drive-hosted configuration.
 - `documents` are discoverable references, not automatically injected context.
 - Tool names describe required capabilities; authentication remains personal.
 - Configuration may contain non-secret IDs, but never credentials or customer data.

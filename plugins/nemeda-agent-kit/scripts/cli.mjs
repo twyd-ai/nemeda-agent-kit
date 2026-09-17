@@ -16,7 +16,7 @@ import {
 function parseArguments(argv) {
   const [command = "help", ...rest] = argv;
   const options = { profiles: [] };
-  if (["slack", "airtable", "cursor", "meeting", "memory"].includes(command) && rest[0] && !rest[0].startsWith("-")) options.subcommand = rest.shift();
+  if (["slack", "airtable", "cursor", "meeting", "memory", "config"].includes(command) && rest[0] && !rest[0].startsWith("-")) options.subcommand = rest.shift();
   for (let index = 0; index < rest.length; index += 1) {
     const value = rest[index];
     if (value === "--json") options.json = true;
@@ -60,6 +60,9 @@ function parseArguments(argv) {
     else if (value === "--team-table") options.teamTable = rest[++index];
     else if (value === "--alias") (options.aliases ||= []).push(rest[++index]);
     else if (value === "--unattended") options.unattended = true;
+    else if (value === "--from-drive") options.fromDrive = rest[++index];
+    else if (value === "--provider") options.provider = rest[++index];
+    else if (value === "--path") options.drivePath = rest[++index];
     else if (command === "meeting" && options.subcommand === "notes" && !options.folder && !value.startsWith("-")) options.folder = value;
     else if (command === "meeting" && options.subcommand === "process" && !options.file && !value.startsWith("-")) options.file = value;
     else if (command === "memory" && options.subcommand === "search" && !options.query && !value.startsWith("-")) options.query = value;
@@ -82,6 +85,8 @@ function help() {
 Usage:
   nemeda-agent init [--cwd PATH] [--project-id ID] [--project-name NAME]
                     [--role ROLE] [--profile PROFILE ...] [--workspace]
+  nemeda-agent init --from-drive "SHARED DRIVE" [--provider google|onedrive] [--path config/agent-kit.json] [--dry-run | --yes] [--json]
+  nemeda-agent config publish [--path config/agent-kit.json] [--dry-run | --yes] [--json]
   nemeda-agent setup [--cwd PATH] [--json] [--dry-run]
   nemeda-agent context [--cwd PATH] [--json]
   nemeda-agent doctor [--cwd PATH] [--json]
@@ -429,6 +434,115 @@ async function runMeeting(options) {
     return report.actions.some((entry) => entry.status === "error") ? 1 : 0;
   }
   throw new Error(`Unknown meeting subcommand: ${subcommand}; use process, list, notes, doctor, setup, watch, install, or uninstall.`);
+}
+
+// A drive-hosted configuration decides where content goes, so creating or
+// publishing one asks first: a person at a terminal answers the prompt, and
+// anything without a terminal must pass --yes. Trusting the central memory
+// service is a separate, stricter gate (confirmWorkspaceTrust in
+// lib/memory-trust.mjs) that --yes never satisfies.
+async function confirmChange(question, options) {
+  if (options.yes) return true;
+  if (!process.stdin.isTTY || !process.stdout.isTTY) {
+    throw new Error("Nothing changed: review the plan with --dry-run, then run again with --yes (or at an interactive terminal).");
+  }
+  const answer = await promptLine(`${question} [y/N] `);
+  return /^y(es)?$/i.test(answer.trim());
+}
+
+function printActions(report, options, title) {
+  if (options.json) {
+    print(report, true);
+    return;
+  }
+  console.log(title);
+  for (const entry of report.actions) console.log(`[${entry.status.toUpperCase()}] ${entry.kind}: ${entry.message}`);
+  if (report.nextSteps?.length) {
+    console.log("\nNext steps:");
+    for (const step of report.nextSteps) console.log(`  - ${step}`);
+  }
+}
+
+async function runInitFromDrive(cwd, options) {
+  if (!options.fromDrive) throw new Error('--from-drive needs the shared drive name, e.g. --from-drive "Acme-Workspace".');
+  const { applyInitFromDrive, planInitFromDrive } = await import("./lib/config-publish.mjs");
+  const plan = planInitFromDrive(cwd, { sharedDrive: options.fromDrive, provider: options.provider, drivePath: options.drivePath });
+  if (options.json && (options.dryRun || !options.yes)) {
+    print({ dryRun: true, ...plan }, true);
+    if (options.dryRun) return 0;
+  } else if (!options.json) {
+    console.log(`Workspace folder: ${plan.root}`);
+    console.log(`Configuration:    ${plan.configPath}`);
+    console.log(`Project:          ${plan.project.name} (${plan.project.id})`);
+    console.log(`Sections:         ${plan.sections.join(", ") || "none"}`);
+    for (const instruction of plan.instructions) console.log(`Instructions:     ${instruction.path} (${instruction.from === "drive" ? "from the shared drive" : instruction.from === "local" ? "from this folder" : "missing"})`);
+    if (plan.central) console.log(`Central memory:   ${plan.central.origin} for project ${plan.central.projectId} (trusted only if you type its host below, or later with \`nemeda-agent memory trust\`)`);
+    for (const warning of plan.warnings) console.log(`Warning:          ${warning}`);
+    if (plan.gitExclude) console.log(`Git:              this folder is inside a repository; ${plan.gitExclude.pattern} goes to ${plan.gitExclude.file}`);
+    console.log(`Will create:      ${plan.pointerPath}`);
+    if (options.dryRun) return 0;
+  }
+  if (!(await confirmChange("Create the pointer?", options))) {
+    console.log("Not confirmed; nothing changed.");
+    return 1;
+  }
+  const report = applyInitFromDrive(plan);
+  await offerTrust(plan, report, options, "init --from-drive");
+  printActions(report, options, `Nemeda Agent Kit init from shared drive "${plan.source.sharedDrive}"`);
+  return 0;
+}
+
+// At a terminal, offer the trust step right away through the same gate as
+// `memory trust`. Without one (an agent, a script, --json) nothing is
+// trusted and the next steps keep saying to run `memory trust`.
+async function offerTrust(plan, report, options, via) {
+  if (!plan.central || plan.central.trustedFromDrive || options.json || !process.stdin.isTTY || !process.stdout.isTTY) return;
+  const { confirmWorkspaceTrust } = await import("./lib/memory-trust.mjs");
+  const context = readWorkspaceContext(plan.root);
+  console.log("");
+  try {
+    const trust = await confirmWorkspaceTrust(plan.root, context.config, { configSource: context.configSource, via });
+    if (trust.trusted || trust.changes.length === 0) report.nextSteps = report.nextSteps.filter((step) => !step.startsWith("nemeda-agent memory trust"));
+  } catch (error) {
+    console.log(`Central memory not trusted yet (${error instanceof Error ? error.message : String(error)}); run \`nemeda-agent memory trust\` when you want. Nothing is sent until then.`);
+  }
+}
+
+async function runConfig(cwd, options) {
+  if (options.subcommand !== "publish") throw new Error("Unknown config subcommand; use: nemeda-agent config publish");
+  const { applyPublish, planPublish } = await import("./lib/config-publish.mjs");
+  const plan = planPublish(cwd, { drivePath: options.drivePath });
+  if (options.json && (options.dryRun || !options.yes)) {
+    const { localText: _text, config: _config, ...visible } = plan;
+    print({ dryRun: true, ...visible }, true);
+    if (options.dryRun) return 0;
+  } else if (!options.json) {
+    console.log(`Workspace folder: ${plan.root}`);
+    console.log(`Publish to:       ${plan.target}${plan.copyConfig ? "" : " (already holds the same configuration)"}`);
+    for (const instruction of plan.instructions) console.log(`Instructions:     ${instruction.path}: ${{ copy: "copied to the drive", kept: "already on the drive", missing: "missing everywhere" }[instruction.action]}`);
+    console.log(`Then:             ${plan.localConfigPath} is replaced by ${plan.pointerPath} (backup at ${plan.backupPath})`);
+    if (plan.central) console.log(`Central memory:   ${plan.central.origin} for project ${plan.central.projectId} (${plan.central.trustedFromDrive ? "already trusted by this workspace; kept" : "not pinned by this workspace yet; you confirm it below, or later with `nemeda-agent memory trust`"})`);
+    if (plan.gitExclude) console.log(`Git:              ${plan.gitExclude.pattern} goes to ${plan.gitExclude.file}`);
+    if (options.dryRun) return 0;
+  }
+  if (!(await confirmChange("Publish the configuration to the shared drive?", options))) {
+    console.log("Not confirmed; nothing changed.");
+    return 1;
+  }
+  const report = applyPublish(plan);
+  await offerTrust(plan, report, options, "config publish");
+  printActions(report, options, `Nemeda Agent Kit config publish to "${plan.source.sharedDrive}"`);
+  return 0;
+}
+
+async function promptLine(question) {
+  const { createInterface } = await import("node:readline/promises");
+  const reader = createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    return await reader.question(question);
+  } finally {
+    reader.close();
+  }
 }
 
 async function readStdin() {
@@ -892,6 +1006,18 @@ export function run(argv = process.argv.slice(2)) {
     if (command === "help" || command === "--help" || command === "-h") {
       print(help());
       return 0;
+    }
+    if (command === "init" && options.fromDrive !== undefined) {
+      return runInitFromDrive(cwd, options).catch((error) => {
+        console.error(`nemeda-agent: ${error instanceof Error ? error.message : String(error)}`);
+        return 2;
+      });
+    }
+    if (command === "config") {
+      return runConfig(cwd, options).catch((error) => {
+        console.error(`nemeda-agent: ${error instanceof Error ? error.message : String(error)}`);
+        return 2;
+      });
     }
     if (command === "init") {
       const result = initializeWorkspace(cwd, options);

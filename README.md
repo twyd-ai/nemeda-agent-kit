@@ -172,6 +172,11 @@ node plugins/nemeda-agent-kit/scripts/cli.mjs init
 node plugins/nemeda-agent-kit/scripts/cli.mjs doctor
 ```
 
+A project that should not have a repository just for its configuration can
+keep it on the shared drive instead: `nemeda-agent config publish` moves it
+there, and each teammate runs `nemeda-agent init --from-drive "<shared drive>"`
+in their own folder ([configuration.md](docs/configuration.md#configuration-on-the-shared-drive)).
+
 `init` never overwrites an existing configuration or `AGENTS.md`. It creates:
 
 ```text
