@@ -179,6 +179,21 @@ test("confirmWorkspaceTrust pins only after the person types the host, recording
   assert.equal(pinned.folders.memory.identity, "local:memory", "and the memory folder is pinned in the same step");
   assert.equal(pinned.folders.memory.via, "init --from-drive");
 
+  // Meetings folders are shown and pinned in the same confirmation.
+  const meetingsConfig = { ...config, meetings: { transcripts: "docs/transcripts", notes: "docs/meetings" } };
+  const meetingsRoot = workspace(meetingsConfig);
+  mkdirSync(path.join(meetingsRoot, "docs", "transcripts"), { recursive: true });
+  mkdirSync(path.join(meetingsRoot, "docs", "meetings"), { recursive: true });
+  const meetingsTerminal = fakeTerminal("memory.example.ts.net");
+  const meetingsResult = await confirmWorkspaceTrust(meetingsRoot, meetingsConfig, { configSource: "drive", via: "config publish", environment, input: meetingsTerminal.input, output: meetingsTerminal.output });
+  assert.ok(meetingsResult.changes.some((change) => change.kind === "meetings transcripts folder" && change.to === "./docs/transcripts"));
+  assert.ok(meetingsResult.changes.some((change) => change.kind === "meetings notes folder"));
+  const meetingsPins = JSON.parse(readFileSync(workspacePinsPath(meetingsRoot), "utf8")).folders;
+  assert.deepEqual(
+    [meetingsPins["meetings:transcripts"]?.identity, meetingsPins["meetings:transcripts"]?.via, meetingsPins["meetings:notes"]?.identity],
+    ["local:docs/transcripts", "config publish", "local:docs/meetings"]
+  );
+
   // A later trust that only confirms a folder leaves the central pin's record alone.
   const folderOnly = workspace(config);
   trustCentralPins(folderOnly, { mcpUrl: "https://memory.example.ts.net/mcp", projectId: "acme" }, environment, { via: "config publish" });

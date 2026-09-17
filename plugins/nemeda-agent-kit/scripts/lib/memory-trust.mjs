@@ -7,6 +7,7 @@
 // agent or a script cannot confirm it.
 import { createInterface } from "node:readline/promises";
 import { workspaceDriveEnvironment } from "./config-source.mjs";
+import { meetingDestinations } from "./meetings-destinations.mjs";
 import { centralSettings } from "./memory-central.mjs";
 import {
   checkFolderPin,
@@ -38,15 +39,20 @@ export async function confirmWorkspaceTrust(root, config, {
   const plan = settings
     ? describeCentralTrust(root, settings, environment)
     : { origin: null, projectId: config.project.id, configSource: configSource || "repository", changes: pendingFolderChanges(root) };
-  // A memory folder not pinned yet would otherwise pin itself silently on the
-  // first write, leaving a window in which a configuration edit could point
-  // it elsewhere unseen. The person confirming sees where journals go and
-  // pins it in the same step.
-  const memoryDestination = config.memory?.project?.path
-    ? folderIdentity(root, config.memory.project.path, config.drive, workspaceDriveEnvironment(root, environment))
-    : null;
-  const pinMemoryFolder = Boolean(memoryDestination?.identity) && memoryDestination.insideDrive !== false && !readWorkspacePins(root).folders?.memory;
-  if (pinMemoryFolder) plan.changes.push({ kind: "memory folder", from: null, to: describeFolderIdentity(memoryDestination.identity) });
+  // Write destinations not pinned yet (the memory folder and the meetings
+  // folders) would otherwise pin themselves silently on their first write,
+  // leaving a window in which a configuration edit could point them
+  // elsewhere unseen. The person confirming sees where journals, transcripts,
+  // and notes go, and pins them in the same step.
+  const driveEnvironment = workspaceDriveEnvironment(root, environment);
+  const pinnedFolders = readWorkspacePins(root).folders || {};
+  const unpinnedFolders = [
+    ...(config.memory?.project?.path ? [{ kind: "memory", label: "memory folder", folder: config.memory.project.path }] : []),
+    ...meetingDestinations(config.meetings).map((destination) => ({ kind: destination.kind, label: `meetings ${destination.name} folder`, folder: destination.folder }))
+  ]
+    .map((destination) => ({ ...destination, destination: folderIdentity(root, destination.folder, config.drive, driveEnvironment) }))
+    .filter(({ kind, destination }) => destination.identity && destination.insideDrive !== false && !pinnedFolders[kind]);
+  for (const folder of unpinnedFolders) plan.changes.push({ kind: folder.label, from: null, to: describeFolderIdentity(folder.destination.identity) });
   if (url && serviceOrigin(url) !== plan.origin) {
     throw new Error(`This workspace uses ${plan.origin || "no service URL"}, not ${serviceOrigin(url) || url}; trust the URL its configuration names, or change the configuration first.`);
   }
@@ -80,7 +86,7 @@ export async function confirmWorkspaceTrust(root, config, {
     trustCentralPins(root, { mcpUrl: settings.mcpUrl, projectId: settings.projectId }, environment, { via });
   }
   trustPendingFolders(root);
-  if (pinMemoryFolder) checkFolderPin(root, "memory", memoryDestination, { recordFirstUse: true, via });
+  for (const folder of unpinnedFolders) checkFolderPin(root, folder.kind, folder.destination, { recordFirstUse: true, via });
   log(`Trusted ${plan.changes.map((change) => change.kind).join(", ")} for this workspace; paused writers resume.`);
   return { trusted: true, changes: plan.changes };
 }
