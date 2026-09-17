@@ -197,6 +197,6 @@ test("spawnDetachedSync records the attempt and starts `memory sync` in the back
   assert.ok(readSyncState(root).lastAttemptAt);
   const deadline = Date.now() + 10_000;
   while (!existsSync(marker) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 50));
-  assert.deepEqual(JSON.parse(readFileSync(marker, "utf8")), ["memory", "sync", "--cwd", root]);
+  assert.deepEqual(JSON.parse(readFileSync(marker, "utf8")), ["memory", "sync", "--cwd", root, "--unattended"]);
   assert.match(readFileSync(path.join(root, ".nemeda", "state", "memory-sync.log"), "utf8"), /background sync started/);
 });

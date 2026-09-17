@@ -14,6 +14,7 @@
 //   memory.central.mcpUrl and a personal token exist (MEMORY_SYNC_AUTO=false
 //   turns it off).
 import { pendingReviewCount, recordSessionActivity, resolveMemoryHookWorkspace, shouldTriggerHarvest, spawnDetachedHarvest } from "../lib/harvest.mjs";
+import { checkMemoryWrite } from "../lib/memory-pins.mjs";
 import { shouldTriggerSync, spawnDetachedSync } from "../lib/memory-sync.mjs";
 
 // The Slack runner injects repository context itself and must stay
@@ -34,12 +35,16 @@ try {
     recordSessionActivity(workspace.root, { sessionId: event.session_id, cwd: event.cwd, environment: process.env });
     if (isSessionStart) {
       const lines = [];
-      const decision = shouldTriggerHarvest(workspace.root, workspace.config, process.env);
+      // A changed project or a moved memory folder pauses every unattended
+      // writer started from here; say so, so the pause is never silent.
+      const writeGuard = checkMemoryWrite(workspace.root, workspace.config, { unattended: true, environment: process.env });
+      if (!writeGuard.allowed) lines.push(`Project memory: unattended writes are paused. ${writeGuard.message}`);
+      const decision = writeGuard.allowed ? shouldTriggerHarvest(workspace.root, workspace.config, process.env) : { trigger: false };
       if (decision.trigger) {
         spawnDetachedHarvest(workspace.root, { environment: process.env });
         lines.push(`Project memory: summarising ${decision.closed} earlier session${decision.closed === 1 ? "" : "s"} in the background; the resulting entries land as pending review (log: .nemeda/state/harvest.log).`);
       }
-      const syncDecision = shouldTriggerSync(workspace.root, workspace.config, process.env, { configSource: workspace.configSource });
+      const syncDecision = writeGuard.allowed ? shouldTriggerSync(workspace.root, workspace.config, process.env, { configSource: workspace.configSource }) : { trigger: false };
       if (syncDecision.trigger) {
         spawnDetachedSync(workspace.root, { environment: process.env });
       } else if (syncDecision.paused) {

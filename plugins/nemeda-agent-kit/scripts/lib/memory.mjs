@@ -20,6 +20,7 @@ import { randomBytes } from "node:crypto";
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { memoryAuthor } from "./memory-author.mjs";
+import { checkMemoryWrite } from "./memory-pins.mjs";
 import { readWorkspaceContext } from "./workspace.mjs";
 
 export const ENTRY_TYPES = ["ai-interaction", "decision", "finding", "meeting"];
@@ -294,6 +295,10 @@ export function recordEntry(root, { type, title, summary, date, source, links, t
     const memoryRoot = path.join(context.root, context.config.memory.project.path);
     const authorEmail = author || resolveAuthorEmail(context.root);
     if (!authorEmail) return null;
+    // Feature logging (meeting entries) is an unattended write: it stops when
+    // the project or the memory folder changed until a person confirms it
+    // (docs/drive-config-plan.md, guards 4 and 5).
+    if (!checkMemoryWrite(context.root, context.config, { unattended: true }).allowed) return null;
     const sourceIsString = typeof source === "string";
     const sourceKind = sourceIsString ? source : source?.kind || (type === "session" ? "session" : "manual");
     const sourceExtra = !sourceIsString && source && typeof source === "object" ? source : {};

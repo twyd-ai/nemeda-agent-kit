@@ -28,6 +28,10 @@
   workspace pins them on first use, and a later change sends nothing until
   a person confirms it with `nemeda-agent memory trust` at an interactive
   terminal. `doctor` reports `central-origin` and `central-project`.
+- The memory folder must resolve inside its shared drive, and a move within
+  the drive pauses the unattended writers (harvest, meeting entries, the
+  automatic sync) until `memory trust`; interactive commands warn and
+  `doctor` reports `memory-destination`.
 
 ## 0.4.0 — 2026-09-15
 

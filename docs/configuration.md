@@ -698,6 +698,15 @@ interactive terminal, so an agent or a script cannot confirm it for you.
 `doctor` reports an unconfirmed change as `central-origin` or
 `central-project`, and never pins anything itself.
 
+The memory folder is pinned the same way, by its place inside the shared
+drive (`Acme/memory`), not by its local path, so a new mount path is not a
+move. A memory folder that resolves outside `drive.sharedDrive` is refused
+for every writer. When it moves to another folder of the same drive, which
+may be shared with more people, the unattended writers stop until you run
+`memory trust`: harvest, meeting entries, and the automatic sync. The next
+session's context line says so. Commands you run yourself only warn.
+`doctor` reports it as `memory-destination`.
+
 In agent sessions, Claude Desktop and Claude Code connect to the service
 directly as an MCP connector (Entra sign-in). Codex and Cursor get the same
 read-only tools — `memory_central_search`, `memory_central_digests`,

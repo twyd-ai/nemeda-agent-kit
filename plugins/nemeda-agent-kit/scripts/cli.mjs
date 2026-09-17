@@ -58,6 +58,7 @@ function parseArguments(argv) {
     else if (value === "--table") options.table = rest[++index];
     else if (value === "--team-table") options.teamTable = rest[++index];
     else if (value === "--alias") (options.aliases ||= []).push(rest[++index]);
+    else if (value === "--unattended") options.unattended = true;
     else if (command === "meeting" && options.subcommand === "notes" && !options.folder && !value.startsWith("-")) options.folder = value;
     else if (command === "meeting" && options.subcommand === "process" && !options.file && !value.startsWith("-")) options.file = value;
     else if (command === "memory" && options.subcommand === "search" && !options.query && !value.startsWith("-")) options.query = value;
@@ -473,6 +474,19 @@ async function runMemory(options) {
   const memoryLib = await import("./lib/memory.mjs");
   const memoryRoot = path.join(context.root, context.config.memory.project.path);
 
+  // Every command that writes memory asks the destination guard first
+  // (docs/drive-config-plan.md, guards 4 and 5). Harvest and the sync the
+  // SessionStart hook starts (--unattended) are unattended: a moved memory
+  // folder stops them. The rest are a person at a terminal: only a warning.
+  const unattendedWriter = subcommand === "harvest" || (subcommand === "sync" && options.unattended);
+  const interactiveWriter = ["add", "recap", "close", "reopen", "import-airtable"].includes(subcommand) || (subcommand === "review" && options.reviewId);
+  if ((unattendedWriter || interactiveWriter) && !options.dryRun) {
+    const { checkMemoryWrite } = await import("./lib/memory-pins.mjs");
+    const guard = checkMemoryWrite(context.root, context.config, { unattended: unattendedWriter });
+    if (!guard.allowed) throw new Error(guard.message);
+    if (guard.warning) console.error(`nemeda-agent: ${guard.warning}`);
+  }
+
   if (subcommand === "add") {
     const stdin = (await readStdin()).trim();
     let fields = {};
@@ -603,8 +617,10 @@ async function runMemory(options) {
     const central = await import("./lib/memory-central.mjs");
     const pins = await import("./lib/memory-pins.mjs");
     const settings = central.centralSettings(context.config, { configSource: context.configSource });
-    if (!settings) throw new Error("No memory.central section in the workspace configuration; there is nothing to trust.");
-    const plan = pins.describeCentralTrust(context.root, settings);
+    // Without a central section only folder moves can need confirming.
+    const plan = settings
+      ? pins.describeCentralTrust(context.root, settings)
+      : { origin: null, projectId: context.config.project.id, configSource: context.configSource || "repository", changes: pins.pendingFolderChanges(context.root) };
     if (options.trustUrl && pins.serviceOrigin(options.trustUrl) !== plan.origin) {
       throw new Error(`This workspace uses ${plan.origin || "no service URL"}, not ${pins.serviceOrigin(options.trustUrl) || options.trustUrl}; trust the URL its configuration names, or change the configuration first.`);
     }
@@ -624,8 +640,9 @@ async function runMemory(options) {
     const expected = plan.origin ? new URL(plan.origin).host : plan.projectId;
     const answer = await promptLine(`Type ${expected} to trust it: `);
     if (answer.trim() !== expected) throw new Error("Not confirmed; nothing changed.");
-    pins.trustCentralPins(context.root, { mcpUrl: settings.mcpUrl, projectId: settings.projectId });
-    console.log(`Trusted ${plan.origin || "the project"} as ${plan.projectId} for this workspace.`);
+    if (settings) pins.trustCentralPins(context.root, { mcpUrl: settings.mcpUrl, projectId: settings.projectId });
+    pins.trustPendingFolders(context.root);
+    console.log(`Trusted ${plan.changes.map((change) => change.kind).join(", ")} for this workspace; paused writers resume.`);
     return 0;
   }
 

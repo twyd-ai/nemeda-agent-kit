@@ -18,6 +18,7 @@ import { ENV_LOCAL_NAME, loadEnvLocal } from "./env.mjs";
 import { meetingDoctorChecks } from "./meetings-doctor.mjs";
 import { memoryAuthor, memoryAuthorCheck } from "./memory-author.mjs";
 import { centralOfflineChecks, serviceUrlProblem } from "./memory-central.mjs";
+import { memoryDestinationChecks } from "./memory-pins.mjs";
 
 export const CONFIG_RELATIVE_PATH = path.join(".nemeda", "agent-kit.json");
 export const CONFIG_SCHEMA_VERSION = 1;
@@ -696,6 +697,7 @@ export function workspaceDoctor(start = defaultWorkspaceDirectory()) {
     if (context.config.workspace?.repositories) repositoryDoctorChecks(context.root, context.config.workspace.repositories, checks);
     if (context.config.airtable) airtableDoctorChecks(context.root, context.config.airtable, checks);
     if (context.config.memory) memoryDoctorChecks(context.root, context.config.memory, checks);
+    if (context.config.memory) checks.push(...memoryDestinationChecks(context.root, context.config));
     if (context.config.memory?.central) checks.push(...centralOfflineChecks(context.root, context.config, process.env, { configSource: context.configSource }));
     if (context.config.meetings) checks.push(...meetingDoctorChecks(context.root, context.config.meetings, context.config.drive, process.env, { memoryConfigured: Boolean(context.config.memory), projectId: context.config.project.id }));
   }

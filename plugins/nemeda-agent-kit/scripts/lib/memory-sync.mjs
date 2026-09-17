@@ -286,7 +286,7 @@ export function spawnDetachedSync(root, { environment = process.env, cliPath = D
   appendFileSync(logPath, `\n[${new Date(now).toISOString()}] background sync started from SessionStart\n`);
   const fd = openSync(logPath, "a");
   try {
-    const child = spawn(process.execPath, [cliPath, "memory", "sync", "--cwd", root], {
+    const child = spawn(process.execPath, [cliPath, "memory", "sync", "--cwd", root, "--unattended"], {
       cwd: root,
       detached: true,
       stdio: ["ignore", fd, fd],
