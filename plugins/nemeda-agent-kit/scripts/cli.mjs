@@ -54,6 +54,9 @@ function parseArguments(argv) {
     else if (value === "--central") options.central = true;
     else if (value === "--period") options.period = rest[++index];
     else if (value === "--host") options.host = rest[++index];
+    else if (value === "--base") options.base = rest[++index];
+    else if (value === "--table") options.table = rest[++index];
+    else if (value === "--team-table") options.teamTable = rest[++index];
     else if (command === "meeting" && options.subcommand === "notes" && !options.folder && !value.startsWith("-")) options.folder = value;
     else if (command === "meeting" && options.subcommand === "process" && !options.file && !value.startsWith("-")) options.file = value;
     else if (command === "memory" && options.subcommand === "search" && !options.query && !value.startsWith("-")) options.query = value;
@@ -105,6 +108,7 @@ Usage:
   nemeda-agent memory recap --period PERIOD [--host claude|codex] [--dry-run] [--json]
   nemeda-agent memory close [--host claude|codex] [--dry-run | --yes] [--json]
   nemeda-agent memory reopen [--dry-run | --yes] [--json]
+  nemeda-agent memory import-airtable [--base appXXX] [--table NAME] [--team-table NAME] [--dry-run] [--json]
 
 Commands:
   init     Create missing .nemeda/agent-kit.json and AGENTS.md safely.
@@ -212,6 +216,14 @@ Commands:
                        project closed in central memory. --dry-run
                        previews the digest; --yes does it
              reopen    undo a close with a reopen digest (--yes)
+             import-airtable
+                       migrate an Airtable Knowledge Log (--base, else
+                       airtable.baseId; --table, default "Knowledge Log")
+                       into journal/import-airtable-<base>.jsonl, each
+                       entry under its Person's Team email, Reviewed and
+                       Incorporated as reviewed. Needs AIRTABLE_API_KEY with
+                       data.records:read. Re-runnable: imported records are
+                       skipped. Then \`memory sync --all\` promotes them
 `;
 }
 
@@ -567,6 +579,36 @@ async function runMemory(options) {
     return report.errors.length ? 1 : 0;
   }
 
+  if (subcommand === "import-airtable") {
+    const { loadEnvLocal } = await import("./lib/env.mjs");
+    loadEnvLocal(context.root, process.env);
+    const { DEFAULT_AIRTABLE_API_URL, importAirtableKnowledgeLog } = await import("./lib/memory-import-airtable.mjs");
+    const fallbackAuthor = memoryLib.resolveAuthorEmail(context.root);
+    const report = await importAirtableKnowledgeLog(context.root, context.config, {
+      baseId: options.base,
+      table: options.table,
+      teamTable: options.teamTable,
+      apiKey: process.env.AIRTABLE_API_KEY,
+      fallbackAuthor,
+      dryRun: Boolean(options.dryRun),
+      apiUrl: process.env.NEMEDA_AIRTABLE_API_URL || DEFAULT_AIRTABLE_API_URL
+    });
+    if (options.json) {
+      print(report, true);
+      return 0;
+    }
+    console.log(`${report.dryRun ? "Would import" : "Imported"} ${report.imported.length} of ${report.fetched} records from ${report.baseId} / ${report.table} (${report.counts.reviewed} reviewed, ${report.counts.pending} pending) ${report.dryRun ? "into" : "->"} ${report.journal}`);
+    for (const [author, count] of Object.entries(report.counts.byAuthor)) console.log(`  ${count} by ${author}`);
+    if (report.alreadyImported) console.log(`  ${report.alreadyImported} already imported earlier, skipped.`);
+    for (const skipped of report.skipped) console.log(`  skipped ${skipped.recordId}: ${skipped.reason}`);
+    if (report.unresolvedAuthors.length) {
+      console.log(`  ${report.unresolvedAuthors.length} record(s) had no Person with an Email in the Team table and are attributed to ${fallbackAuthor}: ${report.unresolvedAuthors.join(", ")}`);
+    }
+    if (report.teamWarning) console.log(`  ${report.teamWarning}`);
+    if (!report.dryRun && report.counts.reviewed) console.log("Next: `nemeda-agent memory sync --all --dry-run`, then `memory sync --all`, promotes the reviewed ones (every author's) to central memory.");
+    return 0;
+  }
+
   if (subcommand === "recap" || subcommand === "close" || subcommand === "reopen") {
     const recap = await import("./lib/memory-recap.mjs");
     const host = options.host || recap.defaultRecapHost(process.env);
@@ -726,7 +768,7 @@ async function runMemory(options) {
     return results.some((result) => !result.ok) ? 1 : 0;
   }
 
-  throw new Error(`Unknown memory subcommand: ${subcommand}; use add, list, search, review, harvest, index, install, uninstall, sync, doctor, recap, close, or reopen.`);
+  throw new Error(`Unknown memory subcommand: ${subcommand}; use add, list, search, review, harvest, index, install, uninstall, sync, doctor, recap, close, reopen, or import-airtable.`);
 }
 
 async function runSlack(options) {

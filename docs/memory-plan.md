@@ -2,7 +2,7 @@
 
 Status: shipped in 0.4.0 — the project layer (phases 1a–1b-iii, see
 "Phases") and the central layer client (phases 3a–3c); `import-airtable`
-(1b-iv) still pending. Supersedes `airtable.knowledgeLog`. The central database and its
+(1b-iv) after 0.4.0. Supersedes `airtable.knowledgeLog`. The central database and its
 service are designed in [central-memory-plan.md](central-memory-plan.md).
 
 Goal: replace the Airtable Knowledge Log with a memory layer the kit owns end
@@ -411,12 +411,19 @@ by every memory path instead of `git config user.email` when set);
    the "unir y recapitular" step that makes central memory readable, not
    just searchable. Company-wide recaps on a schedule belong to the
    database's own tooling, not to the kit.
-8. **Migration** — `nemeda-agent memory import-airtable` reads the existing
-   Knowledge Log base(s) once with `AIRTABLE_API_KEY`, maps fields to the
-   entry shape (Person → email via the Team table), writes them into the
-   importing person's journal with `source.kind = "airtable"` and the record
-   id, and reports counts. Re-runnable: existing `source.recordId` values
-   are skipped.
+8. **Migration** — `nemeda-agent memory import-airtable` reads an existing
+   Knowledge Log base once with `AIRTABLE_API_KEY`, maps fields to the
+   entry shape (Person → email via the Team table; `Reviewed` and
+   `Incorporated` → reviewed; `N/A` client summaries dropped), and writes
+   them with `source.kind = "airtable"` and the record id into
+   `journal/import-airtable-<baseId>.jsonl`, an import journal only the
+   importer writes. Each entry keeps its real author, which the importer's
+   own journal could not, and no teammate's journal gets a second writer; a
+   record whose Person has no Team email is signed by the importer and
+   listed in the report. A teammate reviewing an imported entry appends the
+   revision to their own journal, merged by id as usual. Re-runnable:
+   existing `source.recordId` values for that base are skipped. Promotion
+   is `memory sync --all`, since the entries belong to several authors.
 
 ## Unattended capture
 
@@ -577,7 +584,7 @@ nemeda-agent memory sync [--all] [--dry-run] [--via service|psql]      # shipped
 nemeda-agent memory close [--host H] [--dry-run | --yes]               # shipped: closure digest + sync of every author
 nemeda-agent memory reopen [--dry-run | --yes]                         # shipped: reopen digest + sync
 nemeda-agent memory recap --period P [--host H] [--dry-run]            # shipped: project scope (central recaps are the service's job)
-nemeda-agent memory import-airtable [--base app…] [--dry-run]               # pending (1b-iv)
+nemeda-agent memory import-airtable [--base app…] [--table T] [--dry-run]   # shipped (1b-iv)
 nemeda-agent memory doctor [--json]                                    # shipped: memory rows plus the online central checks
 ```
 
@@ -680,8 +687,11 @@ migration there, and a major change bumps `meta.schema_version`.
      "read the raw transcript" fallback for a session that can no longer be
      resumed (a failed resume is recorded as a harvest error today, never
      fabricated), and the `memory-harvest` doctor check. The scheduled trigger (`memory install`/`uninstall`: launchd, systemd user timer, Task Scheduler) is shipped.
-   - **1b-iv, pending**: `import-airtable`, migrating existing Knowledge Log
-     bases into journals.
+   - **1b-iv, done**: `import-airtable` (`scripts/lib/memory-import-airtable.mjs`),
+     migrating a Knowledge Log base into its import journal through the
+     Airtable REST API with pagination and 429 retries; tested against a
+     `node:http` stand-in for Airtable, including a teammate reviewing an
+     imported entry from their own journal.
 2. **Meeting integration** (with `meeting-capture-plan.md` phase 3): the
    pipeline writes `meeting` entries; `meeting-summary.md` retired.
 3. **Central connection** (0.4.0). Depends on the service being deployed
@@ -716,8 +726,8 @@ migration there, and a major change bumps `meta.schema_version`.
      `memory-grants` (exactly SELECT on the contract and INSERT on
      entries/digests; warns on anything broader) rows in `memory doctor`;
      `memory.central.schema` validated as a plain identifier. Removing
-     `airtable.knowledgeLog` waits for `import-airtable` (1b-iv), so
-     existing Knowledge Logs can be migrated first.
+     `airtable.knowledgeLog` waits until the existing Knowledge Logs have
+     been migrated with `import-airtable` (1b-iv).
 4. **RAG** (outside the kit): embeddings and hybrid search live in the
    database and the service from the start (central-memory-plan.md); the kit
    only surfaces the service's read-only tools through `workspace-context`

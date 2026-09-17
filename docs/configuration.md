@@ -701,6 +701,26 @@ the service is reachable, speaks a contract version this kit knows, accepts
 your token, and lists this project, and how many of your entries are
 waiting for `memory sync`.
 
+### Migrating an Airtable Knowledge Log
+
+`nemeda-agent memory import-airtable --base appXXXXXXXXXXXXXX` copies a
+project's existing Knowledge Log (the table `nemeda-agent airtable init`
+provisions, with its Team table) into project memory. Without `--base` it
+uses `airtable.knowledgeLog` or `airtable.baseId`; `--table` and
+`--team-table` default to "Knowledge Log" and "Team". It needs
+`AIRTABLE_API_KEY` with `data.records:read` on the base, from the
+environment or the workspace `.env.local`.
+
+Every record keeps its author: Person is resolved to the Team table's
+Email, and a record without one is signed by you and listed in the report.
+`Reviewed` and `Incorporated` records arrive reviewed; `Pending` ones stay
+pending for their author to review. The entries go to
+`journal/import-airtable-<base>.jsonl`, which only the person importing
+writes, so run it once per base from one machine; running it again
+imports only records it has not seen. Preview with `--dry-run`, then
+promote with `nemeda-agent memory sync --all --dry-run` and
+`memory sync --all`, since the entries belong to several authors.
+
 `airtable.knowledgeLog` still works but is deprecated in favor of this
 section (`nemeda-agent doctor` reports it); it will be removed once the
 central layer ships.

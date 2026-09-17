@@ -4,6 +4,9 @@
 
 ### Added
 
+- `nemeda-agent memory import-airtable`: migrates an Airtable Knowledge Log
+  into project memory, one import journal per base, every entry under its
+  real author from the Team table, re-runnable without duplicates.
 - `NEMEDA_MEMORY_AUTHOR` (environment or `~/.nemeda/.env.local`): the email
   every memory path attributes entries to, instead of `git config
   user.email`, for people whose git email is a GitHub noreply address. The
