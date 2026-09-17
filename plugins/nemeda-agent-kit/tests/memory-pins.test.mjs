@@ -151,7 +151,7 @@ function fakeTerminal(answer) {
   let printed = "";
   output.on("data", (chunk) => {
     printed += chunk;
-    if (answer !== undefined && printed.includes("to trust it: ")) {
+    if (answer !== undefined && printed.includes("to trust it:\n") && printed.endsWith("> ")) {
       input.write(`${answer}\n`);
       answer = undefined;
     }

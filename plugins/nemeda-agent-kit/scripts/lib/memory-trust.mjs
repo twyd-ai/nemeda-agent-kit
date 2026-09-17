@@ -62,10 +62,14 @@ export async function confirmWorkspaceTrust(root, config, {
     throw new Error("Trusting needs a person at an interactive terminal: it decides where your token and this project's memory go, so an agent or a script cannot confirm it. Run it yourself in a terminal.");
   }
   const expected = plan.origin ? new URL(plan.origin).host : plan.projectId;
+  // The instruction gets its own line and the question a short prompt:
+  // readline redraws the line once prompt plus typing reach the terminal
+  // width, which a narrow panel leaves visibly duplicated.
+  log(`Type ${expected} to trust it:`);
   const reader = createInterface({ input, output });
   let answer;
   try {
-    answer = await reader.question(`Type ${expected} to trust it: `);
+    answer = await reader.question("> ");
   } finally {
     reader.close();
   }
