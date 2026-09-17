@@ -135,16 +135,34 @@ function countBy(items, key) {
   return items.reduce((counts, item) => ({ ...counts, [item[key]]: (counts[item[key]] || 0) + 1 }), {});
 }
 
+// "from=to" strings (the CLI's repeatable --alias) as a Map of lower-cased
+// emails. Throws on anything that is not two email addresses.
+export function parseAuthorAliases(values = []) {
+  const aliases = new Map();
+  for (const value of values) {
+    const [from, to, extra] = String(value).split("=").map((part) => part.trim().toLowerCase());
+    if (extra !== undefined || !/^[^\s@]+@[^\s@]+$/.test(from || "") || !/^[^\s@]+@[^\s@]+$/.test(to || "")) {
+      throw new Error(`--alias expects from@example.com=to@example.com, got "${value}".`);
+    }
+    aliases.set(from, to);
+  }
+  return aliases;
+}
+
 // Imports one base's Knowledge Log. The base and table come from the options,
 // else from airtable.knowledgeLog / airtable.baseId in the workspace config;
 // the table defaults to "Knowledge Log" and the people table to "Team".
-// `fallbackAuthor` (the importer's memory identity) signs records whose Person
-// has no Email in the Team table; the report lists them.
+// `authorAliases` (Map from → to) turns a Team email into the person's memory
+// identity when they differ (a client-side address in Airtable, the company
+// one in memory), so each person is one author and can review their own
+// imported entries. `fallbackAuthor` (the importer's memory identity) signs
+// records whose Person has no Email in the Team table; the report lists them.
 export async function importAirtableKnowledgeLog(root, config, {
   baseId,
   table,
   teamTable = "Team",
   apiKey,
+  authorAliases = new Map(),
   fallbackAuthor,
   dryRun = false,
   fetchImpl = globalThis.fetch,
@@ -169,7 +187,10 @@ export async function importAirtableKnowledgeLog(root, config, {
     emailsByPersonId = new Map(
       team
         .filter((person) => typeof person.fields?.Email === "string" && person.fields.Email.includes("@"))
-        .map((person) => [person.id, person.fields.Email.trim().toLowerCase()])
+        .map((person) => {
+          const email = person.fields.Email.trim().toLowerCase();
+          return [person.id, authorAliases.get(email) || email];
+        })
     );
   } catch (error) {
     teamWarning = `Could not read the ${teamTable} table (${error.message}); every record is attributed to ${fallbackAuthor || "nobody"}.`;

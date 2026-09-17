@@ -57,6 +57,7 @@ function parseArguments(argv) {
     else if (value === "--base") options.base = rest[++index];
     else if (value === "--table") options.table = rest[++index];
     else if (value === "--team-table") options.teamTable = rest[++index];
+    else if (value === "--alias") (options.aliases ||= []).push(rest[++index]);
     else if (command === "meeting" && options.subcommand === "notes" && !options.folder && !value.startsWith("-")) options.folder = value;
     else if (command === "meeting" && options.subcommand === "process" && !options.file && !value.startsWith("-")) options.file = value;
     else if (command === "memory" && options.subcommand === "search" && !options.query && !value.startsWith("-")) options.query = value;
@@ -108,7 +109,7 @@ Usage:
   nemeda-agent memory recap --period PERIOD [--host claude|codex] [--dry-run] [--json]
   nemeda-agent memory close [--host claude|codex] [--dry-run | --yes] [--json]
   nemeda-agent memory reopen [--dry-run | --yes] [--json]
-  nemeda-agent memory import-airtable [--base appXXX] [--table NAME] [--team-table NAME] [--dry-run] [--json]
+  nemeda-agent memory import-airtable [--base appXXX] [--table NAME] [--team-table NAME] [--alias FROM=TO ...] [--dry-run] [--json]
 
 Commands:
   init     Create missing .nemeda/agent-kit.json and AGENTS.md safely.
@@ -223,7 +224,9 @@ Commands:
                        entry under its Person's Team email, Reviewed and
                        Incorporated as reviewed. Needs AIRTABLE_API_KEY with
                        data.records:read. Re-runnable: imported records are
-                       skipped. Then \`memory sync --all\` promotes them
+                       skipped. --alias airtable@client.com=you@company
+                       (repeatable) files a Team email under the person's
+                       memory identity. Then \`memory sync --all\` promotes them
 `;
 }
 
@@ -582,13 +585,14 @@ async function runMemory(options) {
   if (subcommand === "import-airtable") {
     const { loadEnvLocal } = await import("./lib/env.mjs");
     loadEnvLocal(context.root, process.env);
-    const { DEFAULT_AIRTABLE_API_URL, importAirtableKnowledgeLog } = await import("./lib/memory-import-airtable.mjs");
+    const { DEFAULT_AIRTABLE_API_URL, importAirtableKnowledgeLog, parseAuthorAliases } = await import("./lib/memory-import-airtable.mjs");
     const fallbackAuthor = memoryLib.resolveAuthorEmail(context.root);
     const report = await importAirtableKnowledgeLog(context.root, context.config, {
       baseId: options.base,
       table: options.table,
       teamTable: options.teamTable,
       apiKey: process.env.AIRTABLE_API_KEY,
+      authorAliases: parseAuthorAliases(options.aliases),
       fallbackAuthor,
       dryRun: Boolean(options.dryRun),
       apiUrl: process.env.NEMEDA_AIRTABLE_API_URL || DEFAULT_AIRTABLE_API_URL

@@ -713,6 +713,10 @@ environment or the workspace `.env.local`.
 
 Every record keeps its author: Person is resolved to the Team table's
 Email, and a record without one is signed by you and listed in the report.
+When Airtable knows someone by another address than their memory identity
+(a client-side account, say), `--alias airtable@client.com=you@company`
+(repeatable) files their records under the identity they use in memory, so
+each person is one author and can review their own imported entries.
 `Reviewed` and `Incorporated` records arrive reviewed; `Pending` ones stay
 pending for their author to review. The entries go to
 `journal/import-airtable-<base>.jsonl`, which only the person importing

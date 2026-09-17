@@ -12,7 +12,7 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { latestRevisions, readAllJournals } from "../scripts/lib/memory.mjs";
-import { importAirtableKnowledgeLog, importJournalPath, mapKnowledgeLogRecord } from "../scripts/lib/memory-import-airtable.mjs";
+import { importAirtableKnowledgeLog, importJournalPath, mapKnowledgeLogRecord, parseAuthorAliases } from "../scripts/lib/memory-import-airtable.mjs";
 
 const pluginRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const cliPath = path.join(pluginRoot, "scripts", "cli.mjs");
@@ -189,6 +189,24 @@ test("import-airtable takes the base and table from airtable.knowledgeLog, and r
       (error) => /rejected AIRTABLE_API_KEY/.test(error.message) && !error.message.includes("wrong-secret-key")
     );
     await assert.rejects(importAirtableKnowledgeLog(workspace().root, workspace().config, { apiKey: KEY, apiUrl: airtable.url }), /Which Airtable base/);
+  } finally {
+    await airtable.close();
+  }
+});
+
+test("--alias files a Team email under the person's memory identity, and rejects anything else", async () => {
+  assert.deepEqual([...parseAuthorAliases(["Ana@Acme.io = ana@nemeda.io"])], [["ana@acme.io", "ana@nemeda.io"]]);
+  assert.throws(() => parseAuthorAliases(["ana@acme.io"]), /--alias expects/);
+  assert.throws(() => parseAuthorAliases(["ana=ana@nemeda.io"]), /--alias expects/);
+  const airtable = await startAirtable();
+  try {
+    const { root } = workspace();
+    const env = { ...process.env, AIRTABLE_API_KEY: KEY, NEMEDA_AIRTABLE_API_URL: airtable.url };
+    const { stdout } = await execFileAsync(process.execPath, [cliPath, "memory", "import-airtable", "--base", BASE, "--alias", "ana@acme.io=ana@nemeda.io", "--dry-run", "--json", "--cwd", root], { env, encoding: "utf8" });
+    const report = JSON.parse(stdout);
+    assert.equal(report.counts.byAuthor["ana@nemeda.io"], 1);
+    assert.equal(report.counts.byAuthor["ana@acme.io"], undefined);
+    assert.equal(report.counts.byAuthor["bob@acme.io"], 1, "people without an alias keep their Team email");
   } finally {
     await airtable.close();
   }
