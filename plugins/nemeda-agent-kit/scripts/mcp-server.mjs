@@ -157,6 +157,8 @@ const listedTools = CENTRAL_PROXY ? [...tools, ...centralTools] : tools;
 
 async function proxyCentralTool(cwd, name, args) {
   const context = readWorkspaceContext(cwd);
+  const unreadable = unreadableConfigurationMessage(context);
+  if (unreadable) return textResult({ error: unreadable }, true);
   const settings = context.mode === "configured" ? centralSettings(context.config, { configSource: context.configSource }) : null;
   if (!settings?.baseUrl) {
     return textResult({ error: "No memory.central.mcpUrl in .nemeda/agent-kit.json for this repository; central memory is not configured here (see docs/memory-plan.md)." }, true);
@@ -183,6 +185,8 @@ async function proxyCentralTool(cwd, name, args) {
 // configured, so a tool call always gets a JSON answer.
 function loadMemoryEntries(cwd, request = {}) {
   const context = readWorkspaceContext(cwd);
+  const unreadable = unreadableConfigurationMessage(context);
+  if (unreadable) return { error: unreadable };
   if (context.mode !== "configured" || !context.config?.memory) {
     return { error: "No `memory` section in .nemeda/agent-kit.json for this repository; see docs/memory-plan.md." };
   }
