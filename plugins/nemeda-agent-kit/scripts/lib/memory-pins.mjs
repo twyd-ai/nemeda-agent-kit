@@ -204,7 +204,7 @@ function folderKindWording(kind) {
 // different identity is recorded as pending for `memory trust` and pauses
 // unattended writers, while interactive commands get a warning.
 // `recordFirstUse: false` (doctor) writes nothing.
-export function checkFolderPin(root, kind, destination, { unattended = false, recordFirstUse = true, now = new Date() } = {}) {
+export function checkFolderPin(root, kind, destination, { unattended = false, recordFirstUse = true, via = "first-use", now = new Date() } = {}) {
   const wording = folderKindWording(kind);
   if (destination.insideDrive === false) {
     return {
@@ -219,7 +219,7 @@ export function checkFolderPin(root, kind, destination, { unattended = false, re
   const pinned = folders[kind];
   if (!pinned) {
     if (recordFirstUse) {
-      writeStore(workspacePinsPath(root), { ...pins, version: STORE_VERSION, folders: { ...folders, [kind]: { identity: destination.identity, trustedAt: now.toISOString(), via: "first-use" } } });
+      writeStore(workspacePinsPath(root), { ...pins, version: STORE_VERSION, folders: { ...folders, [kind]: { identity: destination.identity, trustedAt: now.toISOString(), via } } });
     }
     return { allowed: true };
   }

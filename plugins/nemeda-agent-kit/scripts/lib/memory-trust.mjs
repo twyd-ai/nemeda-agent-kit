@@ -70,9 +70,13 @@ export async function confirmWorkspaceTrust(root, config, {
     reader.close();
   }
   if (String(answer).trim() !== expected) throw new Error("Not confirmed; nothing changed.");
-  if (settings) trustCentralPins(root, { mcpUrl: settings.mcpUrl, projectId: settings.projectId }, environment, { via });
+  // Only what changed is rewritten, so each pin keeps an honest record of
+  // which command confirmed it and when.
+  if (settings && plan.changes.some((change) => change.kind === "origin" || change.kind === "project")) {
+    trustCentralPins(root, { mcpUrl: settings.mcpUrl, projectId: settings.projectId }, environment, { via });
+  }
   trustPendingFolders(root);
-  if (pinMemoryFolder) checkFolderPin(root, "memory", memoryDestination, { recordFirstUse: true });
+  if (pinMemoryFolder) checkFolderPin(root, "memory", memoryDestination, { recordFirstUse: true, via });
   log(`Trusted ${plan.changes.map((change) => change.kind).join(", ")} for this workspace; paused writers resume.`);
   return { trusted: true, changes: plan.changes };
 }

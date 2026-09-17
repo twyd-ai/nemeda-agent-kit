@@ -177,6 +177,18 @@ test("confirmWorkspaceTrust pins only after the person types the host, recording
   const pinned = JSON.parse(readFileSync(workspacePinsPath(root), "utf8"));
   assert.equal(pinned.central.via, "init --from-drive");
   assert.equal(pinned.folders.memory.identity, "local:memory", "and the memory folder is pinned in the same step");
+  assert.equal(pinned.folders.memory.via, "init --from-drive");
+
+  // A later trust that only confirms a folder leaves the central pin's record alone.
+  const folderOnly = workspace(config);
+  trustCentralPins(folderOnly, { mcpUrl: "https://memory.example.ts.net/mcp", projectId: "acme" }, environment, { via: "config publish" });
+  mkdirSync(path.join(folderOnly, "memory"), { recursive: true });
+  const folderTerminal = fakeTerminal("memory.example.ts.net");
+  const folderResult = await confirmWorkspaceTrust(folderOnly, config, { configSource: "drive", environment, input: folderTerminal.input, output: folderTerminal.output });
+  assert.deepEqual(folderResult.changes.map((change) => change.kind), ["memory folder"]);
+  const folderPins = JSON.parse(readFileSync(workspacePinsPath(folderOnly), "utf8"));
+  assert.equal(folderPins.central.via, "config publish", "the central pin keeps the command that confirmed it");
+  assert.equal(folderPins.folders.memory.via, "memory trust");
   assert.equal(resolveCentralToken(root, centralSettings(config, { configSource: "drive" }), environment).token, STUB_TOKEN);
 
   const again = fakeTerminal();
