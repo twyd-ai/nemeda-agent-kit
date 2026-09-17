@@ -446,7 +446,11 @@ async function confirmChange(question, options) {
   if (!process.stdin.isTTY || !process.stdout.isTTY) {
     throw new Error("Nothing changed: review the plan with --dry-run, then run again with --yes (or at an interactive terminal).");
   }
-  const answer = await promptLine(`${question} [y/N] `);
+  // The question goes on its own line and the prompt stays short: readline
+  // redraws a prompt that reaches the terminal's edge while typing, which a
+  // narrow terminal panel shows as duplicated text.
+  console.log(question);
+  const answer = await promptLine("[y/N] ");
   return /^y(es)?$/i.test(answer.trim());
 }
 
