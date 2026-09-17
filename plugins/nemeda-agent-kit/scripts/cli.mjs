@@ -468,6 +468,13 @@ async function runMemory(options) {
   const subcommand = options.subcommand || "list";
   const cwd = options.cwd || defaultWorkspaceDirectory();
   const context = readWorkspaceContext(cwd);
+  // A configuration that exists but could not be read (invalid JSON, or a
+  // drive pointer with the drive unavailable and no cached copy) is not the
+  // same as a missing memory section: say what went wrong.
+  if (context.mode === "configured" && !context.config) {
+    const reasons = (context.issues || []).filter((issue) => issue.level === "error").map((issue) => issue.message);
+    throw new Error(`The workspace configuration could not be read${reasons.length ? `: ${reasons.join(" ")}` : ""}.`);
+  }
   if (context.mode !== "configured" || !context.config?.memory) {
     throw new Error("No `memory` section in .nemeda/agent-kit.json; see docs/memory-plan.md.");
   }

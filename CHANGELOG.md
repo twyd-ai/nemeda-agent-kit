@@ -16,6 +16,9 @@
 
 - The test suite points `NEMEDA_HOME` at a temporary directory, so it never
   reads a developer's personal `~/.nemeda`.
+- `nemeda-agent memory` commands report that the workspace configuration
+  could not be read, with the reason, instead of claiming the `memory`
+  section is missing.
 
 ### Security
 

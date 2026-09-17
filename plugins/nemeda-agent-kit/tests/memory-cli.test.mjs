@@ -137,3 +137,11 @@ test("memory harvest --session ID resumes a stubbed CLI and files the entry, thr
   const listed = JSON.parse(cli(["memory", "list", "--json", "--cwd", root]).stdout);
   assert.equal(listed.length, 1);
 });
+
+test("memory commands say the workspace configuration could not be read, not that memory is missing", () => {
+  const root = configuredWorkspace();
+  writeFileSync(path.join(root, ".nemeda", "agent-kit.json"), "{ this is not json");
+  const result = cli(["memory", "list", "--cwd", root], { expectFailure: true });
+  assert.match(result.stderr, /workspace configuration could not be read/);
+  assert.doesNotMatch(result.stderr, /No `memory` section/);
+});
