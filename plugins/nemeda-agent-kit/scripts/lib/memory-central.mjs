@@ -167,10 +167,13 @@ async function centralFetch(settings, url, { method = "GET", token, body, header
         ...headers
       },
       body: body === undefined ? undefined : JSON.stringify(body),
-      signal: AbortSignal.timeout(timeoutMs)
+      signal: AbortSignal.timeout(timeoutMs),
+      // The service never redirects API calls, and a redirect is how a
+      // bearer token could be carried to another host: refuse it outright.
+      redirect: "error"
     });
   } catch (error) {
-    const reason = error?.name === "TimeoutError" ? `no answer within ${Math.round(timeoutMs / 1000)} s` : error?.cause?.code || error?.message || String(error);
+    const reason = error?.name === "TimeoutError" ? `no answer within ${Math.round(timeoutMs / 1000)} s` : error?.cause?.code || error?.cause?.message || error?.message || String(error);
     throw new CentralError("unreachable", `Cannot reach the memory service at ${settings.baseUrl} (${reason}). Is this machine on the tailnet?`);
   }
   if (response.status === 401) {

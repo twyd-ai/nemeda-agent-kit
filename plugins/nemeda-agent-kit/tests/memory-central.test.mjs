@@ -5,6 +5,7 @@
 import assert from "node:assert/strict";
 import { execFile, execFileSync, spawn } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import http from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -15,6 +16,7 @@ import {
   CentralError,
   callCentralTool,
   centralDoctorChecks,
+  centralWhoami,
   centralOfflineChecks,
   centralSettings,
   resolveCentralToken,
@@ -233,6 +235,33 @@ test("memory doctor's online checks pass on a healthy service and flag an unregi
   const down = await centralDoctorChecks(dead, readConfig(dead), { environment: tokenEnvironment() });
   assert.equal(down[0].status, "fail");
   assert.match(down[0].message, /Cannot reach the memory service/);
+});
+
+test("the client refuses redirects, so a token is never carried to another host", async () => {
+  const hits = { redirected: 0, target: 0 };
+  const target = http.createServer((request, response) => {
+    hits.target += 1;
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end(JSON.stringify({ email: "attacker@example.com" }));
+  });
+  await new Promise((resolve) => target.listen(0, "127.0.0.1", resolve));
+  const redirector = http.createServer((request, response) => {
+    hits.redirected += 1;
+    response.writeHead(302, { location: `http://127.0.0.1:${target.address().port}/whoami` });
+    response.end();
+  });
+  await new Promise((resolve) => redirector.listen(0, "127.0.0.1", resolve));
+  try {
+    const settings = centralSettings(baseConfig({ mcpUrl: `http://127.0.0.1:${redirector.address().port}/mcp` }));
+    await assert.rejects(centralWhoami(settings, TOKEN), (error) => error instanceof CentralError && /redirect/i.test(error.message));
+    assert.equal(hits.redirected, 1);
+    assert.equal(hits.target, 0, "the redirect was never followed");
+  } finally {
+    for (const server of [target, redirector]) {
+      server.closeAllConnections();
+      await new Promise((resolve) => server.close(resolve));
+    }
+  }
 });
 
 test("the offline doctor row reports configuration and token presence, never the token", () => {

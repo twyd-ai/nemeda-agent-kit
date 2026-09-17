@@ -17,6 +17,11 @@
 - The test suite points `NEMEDA_HOME` at a temporary directory, so it never
   reads a developer's personal `~/.nemeda`.
 
+### Security
+
+- The central memory client refuses HTTP redirects, so a redirect can never
+  carry the personal token to another host.
+
 ## 0.4.0 — 2026-09-15
 
 The release that turns the kit from repository context into a working
