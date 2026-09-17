@@ -9,6 +9,7 @@ import {
   formatContextForHook,
   initializeWorkspace,
   readWorkspaceContext,
+  unreadableConfigurationMessage,
   workspaceDoctor
 } from "./lib/workspace.mjs";
 
@@ -395,6 +396,8 @@ async function runMeeting(options) {
     const { meetingDoctorChecks } = await import("./lib/meetings-doctor.mjs");
     const context = readWorkspaceContext(cwd);
     if (context.mode !== "configured") throw new Error("No .nemeda/agent-kit.json found; run `nemeda-agent init` first.");
+    const unreadable = unreadableConfigurationMessage(context);
+    if (unreadable) throw new Error(unreadable);
     if (!context.config?.meetings) throw new Error("This workspace has no `meetings` section in .nemeda/agent-kit.json; add one to enable meeting capture.");
     const checks = meetingDoctorChecks(context.root, context.config.meetings, context.config.drive, process.env, { explicitEngine: options.engine || null, memoryConfigured: Boolean(context.config.memory), projectId: context.config.project.id });
     printReport({ checks }, options, `Nemeda Agent Kit meeting doctor at ${context.root}`);
@@ -404,6 +407,8 @@ async function runMeeting(options) {
     const { describePlan, planMeetingSetup, runMeetingSetup } = await import("./lib/meetings-setup.mjs");
     const context = readWorkspaceContext(cwd);
     if (context.mode !== "configured") throw new Error("No .nemeda/agent-kit.json found; run `nemeda-agent init` first.");
+    const unreadable = unreadableConfigurationMessage(context);
+    if (unreadable) throw new Error(unreadable);
     if (!context.config?.meetings) throw new Error("This workspace has no `meetings` section in .nemeda/agent-kit.json; add one to enable meeting capture.");
     const plan = planMeetingSetup(context.root, process.env, { obs: options.obs, model: options.model, engine: options.engine });
     const dryRun = Boolean(options.dryRun);

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { recordSeenInstructions } from "./lib/config-source.mjs";
 import { formatContextForHook, readWorkspaceContext } from "./lib/workspace.mjs";
 
 // The Slack runner injects repository context itself and must stay read-only,
@@ -15,7 +16,10 @@ try {
   event = {};
 }
 
-const context = readWorkspaceContext(event.cwd);
+// A configuration on the shared drive that is not downloaded yet would block
+// the session start; the last good copy is used instead and the next command
+// downloads it.
+const context = readWorkspaceContext(event.cwd, { onPlaceholder: "cache" });
 const additionalContext = formatContextForHook(context);
 if (additionalContext) {
   process.stdout.write(`${JSON.stringify({
@@ -24,4 +28,9 @@ if (additionalContext) {
       additionalContext
     }
   })}\n`);
+  // Instructions from the drive are now in this session; a later change to
+  // them is what doctor and the next session flag.
+  if (context.configSource === "drive" || context.configSource === "drive-cache") {
+    recordSeenInstructions(context.root, context.instructions);
+  }
 }

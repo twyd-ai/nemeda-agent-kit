@@ -19,8 +19,10 @@ import { meetingDoctorChecks } from "./meetings-doctor.mjs";
 import { memoryAuthor, memoryAuthorCheck } from "./memory-author.mjs";
 import { centralOfflineChecks, serviceUrlProblem } from "./memory-central.mjs";
 import { memoryDestinationChecks } from "./memory-pins.mjs";
+import { CONFIG_LINK_RELATIVE_PATH, changedDriveInstructions, loadDriveConfig, writeConfigCache } from "./config-source.mjs";
 
 export const CONFIG_RELATIVE_PATH = path.join(".nemeda", "agent-kit.json");
+export { CONFIG_LINK_RELATIVE_PATH };
 export const CONFIG_SCHEMA_VERSION = 1;
 
 const MAX_INSTRUCTION_BYTES = 64 * 1024;
@@ -65,12 +67,17 @@ function parentDirectories(start) {
   return directories;
 }
 
+// The nearest directory with a full configuration or a pointer to one on the
+// shared drive (docs/drive-config-plan.md). A full file wins over a pointer
+// in the same directory; `pointerPath` is still reported so doctor can warn.
 export function findWorkspace(start = defaultWorkspaceDirectory()) {
   for (const directory of parentDirectories(start)) {
     const configPath = path.join(directory, CONFIG_RELATIVE_PATH);
-    if (existsSync(configPath)) {
-      return { root: directory, configPath };
-    }
+    const pointerPath = path.join(directory, CONFIG_LINK_RELATIVE_PATH);
+    const hasConfig = existsSync(configPath);
+    const hasPointer = existsSync(pointerPath);
+    if (hasConfig) return hasPointer ? { root: directory, configPath, pointerPath } : { root: directory, configPath };
+    if (hasPointer) return { root: directory, configPath: null, pointerPath };
   }
   return null;
 }
@@ -528,32 +535,42 @@ function isInside(root, candidate) {
   return relative === "" || (!relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative));
 }
 
-function readInstruction(root, relativePath) {
+// With `driveRoot` (the folder holding a drive-hosted configuration), the
+// instruction is looked up there first and then in the local root, each with
+// its own containment check; the result says which one it came from.
+function readInstruction(root, relativePath, driveRoot = null) {
   if (path.isAbsolute(relativePath) || SECRET_PATH_PATTERN.test(relativePath.replaceAll(path.sep, "/"))) {
     return { path: relativePath, error: "Instruction path is absolute or looks secret-bearing." };
   }
-  const candidate = path.resolve(root, relativePath);
-  if (!isInside(root, candidate)) {
-    return { path: relativePath, error: "Instruction path escapes the workspace root." };
-  }
-  if (!existsSync(candidate)) {
-    return { path: relativePath, error: "Instruction file does not exist." };
-  }
-  try {
-    const realRoot = realpathSync(root);
-    const realCandidate = realpathSync(candidate);
-    if (!isInside(realRoot, realCandidate)) {
-      return { path: relativePath, error: "Instruction symlink resolves outside the workspace root." };
+  const bases = driveRoot ? [[driveRoot, "drive"], [root, "local"]] : [[root, "local"]];
+  let missing = null;
+  for (const [base, source] of bases) {
+    const candidate = path.resolve(base, relativePath);
+    if (!isInside(base, candidate)) {
+      return { path: relativePath, error: "Instruction path escapes the workspace root." };
     }
-    const stat = lstatSync(realCandidate);
-    if (!stat.isFile()) return { path: relativePath, error: "Instruction path is not a regular file." };
-    if (stat.size > MAX_INSTRUCTION_BYTES) {
-      return { path: relativePath, error: `Instruction file exceeds ${MAX_INSTRUCTION_BYTES} bytes.` };
+    if (!existsSync(candidate)) {
+      missing = { path: relativePath, error: "Instruction file does not exist." };
+      continue;
     }
-    return { path: relativePath, content: readFileSync(realCandidate, "utf8") };
-  } catch (error) {
-    return { path: relativePath, error: error instanceof Error ? error.message : String(error) };
+    try {
+      const realRoot = realpathSync(base);
+      const realCandidate = realpathSync(candidate);
+      if (!isInside(realRoot, realCandidate)) {
+        return { path: relativePath, error: "Instruction symlink resolves outside the workspace root." };
+      }
+      const stat = lstatSync(realCandidate);
+      if (!stat.isFile()) return { path: relativePath, error: "Instruction path is not a regular file." };
+      if (stat.size > MAX_INSTRUCTION_BYTES) {
+        return { path: relativePath, error: `Instruction file exceeds ${MAX_INSTRUCTION_BYTES} bytes.` };
+      }
+      const instruction = { path: relativePath, content: readFileSync(realCandidate, "utf8") };
+      return driveRoot ? { ...instruction, source } : instruction;
+    } catch (error) {
+      return { path: relativePath, error: error instanceof Error ? error.message : String(error) };
+    }
   }
+  return missing;
 }
 
 function findLegacyInstructions(start) {
@@ -564,8 +581,78 @@ function findLegacyInstructions(start) {
   return null;
 }
 
-export function readWorkspaceContext(start = defaultWorkspaceDirectory()) {
+// A drive-hosted workspace (docs/drive-config-plan.md): the configuration is
+// read from the shared drive, or from the last good copy when the drive copy
+// cannot be used. `root` stays the local folder, so every workspace-relative
+// path in the configuration keeps its meaning.
+function readDriveHostedContext(workspace, options) {
+  const loaded = loadDriveConfig({
+    root: workspace.root,
+    pointerPath: workspace.pointerPath,
+    validate: validateConfig,
+    environment: options.environment,
+    platform: options.platform,
+    onPlaceholder: options.onPlaceholder,
+    isPlaceholder: options.isPlaceholder
+  });
+  const base = { mode: "configured", root: workspace.root, pointerPath: workspace.pointerPath, configSource: "drive" };
+  if (!loaded.ok) {
+    return { ...base, configPath: loaded.configPath, configDrivePath: null, config: loaded.config, issues: loaded.issues, instructions: [], instructionChanges: [] };
+  }
+  const issues = [...loaded.issues];
+  const instructionPaths = Array.isArray(loaded.config?.context?.instructions) ? loaded.config.context.instructions : [];
+  const instructions = instructionPaths.map((instructionPath) => {
+    if (loaded.fromCache) {
+      const cached = loaded.cachedInstructions.find((item) => item.path === instructionPath);
+      if (cached) return { path: instructionPath, content: cached.content, source: "drive" };
+      return { ...readInstruction(workspace.root, instructionPath), source: "local" };
+    }
+    return readInstruction(workspace.root, instructionPath, loaded.configDir);
+  });
+  for (const instruction of instructions) {
+    if (instruction.error) {
+      issues.push({ level: "error", code: "invalid-instruction", message: `${instruction.path}: ${instruction.error}` });
+    }
+  }
+  if (!loaded.fromCache) {
+    writeConfigCache(workspace.root, { source: loaded.source, configPath: loaded.configPath, text: loaded.text, config: loaded.config, instructions });
+  }
+  const instructionChanges = changedDriveInstructions(workspace.root, instructions);
+  if (instructionChanges.length > 0) {
+    issues.push({
+      level: "warning",
+      code: "config-instructions",
+      message: `Instructions from the shared drive changed since the last session on this machine: ${instructionChanges.join(", ")}. Anyone with edit rights on the drive can change them; review the change.`
+    });
+  }
+  return {
+    ...base,
+    configSource: loaded.fromCache ? "drive-cache" : "drive",
+    configPath: loaded.configPath,
+    configDrivePath: loaded.configDir,
+    config: loaded.config,
+    issues,
+    instructions,
+    instructionChanges
+  };
+}
+
+// A configuration that exists but could not be read (invalid JSON, or a drive
+// pointer whose drive is unavailable with no cached copy) is not the same as a
+// missing section. Returns the message to show, or null when the
+// configuration was read. Same wording as `nemeda-agent memory`.
+export function unreadableConfigurationMessage(context) {
+  if (context?.mode !== "configured" || context.config) return null;
+  const reasons = (context.issues || []).filter((issue) => issue.level === "error").map((issue) => issue.message);
+  return `The workspace configuration could not be read${reasons.length ? `: ${reasons.join(" ")}` : ""}.`;
+}
+
+// `options` (all optional): `environment` for drive detection, `platform`,
+// and `onPlaceholder: "cache"` for hooks that must not block on a drive file
+// that is not downloaded yet. Repository-hosted workspaces ignore them.
+export function readWorkspaceContext(start = defaultWorkspaceDirectory(), options = {}) {
   const workspace = findWorkspace(start);
+  if (workspace && !workspace.configPath) return readDriveHostedContext(workspace, options);
   if (!workspace) {
     const legacy = findLegacyInstructions(start);
     if (!legacy) {
@@ -581,17 +668,21 @@ export function readWorkspaceContext(start = defaultWorkspaceDirectory()) {
     };
   }
 
+  const bothIssue = workspace.pointerPath
+    ? [{ level: "warning", code: "config-both", message: `${CONFIG_RELATIVE_PATH} and ${CONFIG_LINK_RELATIVE_PATH} are both present; the local file is used and the pointer is ignored. Delete the one you do not mean to use.` }]
+    : [];
   const parsed = readJsonFile(workspace.configPath);
   if (parsed.error) {
     return {
       mode: "configured",
       ...workspace,
+      configSource: "repository",
       config: null,
-      issues: [{ level: "error", code: "invalid-json", message: parsed.error }],
+      issues: [{ level: "error", code: "invalid-json", message: parsed.error }, ...bothIssue],
       instructions: []
     };
   }
-  const issues = validateConfig(parsed.value);
+  const issues = [...validateConfig(parsed.value), ...bothIssue];
   const instructionPaths = Array.isArray(parsed.value?.context?.instructions)
     ? parsed.value.context.instructions
     : [];
@@ -601,7 +692,7 @@ export function readWorkspaceContext(start = defaultWorkspaceDirectory()) {
       issues.push({ level: "error", code: "invalid-instruction", message: `${instruction.path}: ${instruction.error}` });
     }
   }
-  return { mode: "configured", ...workspace, config: parsed.value, issues, instructions };
+  return { mode: "configured", ...workspace, configSource: "repository", config: parsed.value, issues, instructions };
 }
 
 function runGit(root, args) {
@@ -632,11 +723,28 @@ function compatibilityFileIsThin(root) {
   return /^@AGENTS\.md\s*$/i.test(text) || text.length < 80;
 }
 
-export function workspaceDoctor(start = defaultWorkspaceDirectory()) {
-  const context = readWorkspaceContext(start);
+export function workspaceDoctor(start = defaultWorkspaceDirectory(), options = {}) {
+  const context = readWorkspaceContext(start, options);
   const checks = [];
-  if (context.mode === "configured") {
+  const driveHosted = context.configSource === "drive" || context.configSource === "drive-cache";
+  if (context.mode === "configured" && !driveHosted) {
     checks.push({ status: "pass", code: "configuration-found", message: `Configuration found at ${context.configPath}.` });
+    checks.push({ status: "pass", code: "config-source", message: "Configuration comes from the workspace itself (repository-hosted)." });
+  } else if (context.mode === "configured" && context.config) {
+    checks.push({ status: "pass", code: "configuration-found", message: `Configuration found at ${context.configPath}.` });
+    checks.push({
+      status: "pass",
+      code: "config-source",
+      message: context.configSource === "drive"
+        ? `Configuration read from the shared drive through ${CONFIG_LINK_RELATIVE_PATH}.`
+        : `Configuration taken from the cached copy of the shared-drive file, through ${CONFIG_LINK_RELATIVE_PATH}.`
+    });
+    const fromDrive = context.instructions.filter((instruction) => instruction.source === "drive").map((instruction) => instruction.path);
+    if (fromDrive.length > 0) {
+      checks.push({ status: "pass", code: "instructions-source", message: `Instructions read from the shared drive and injected into every session: ${fromDrive.join(", ")}.` });
+    }
+  } else if (context.mode === "configured") {
+    checks.push({ status: "fail", code: "configuration-found", message: `The workspace points to a configuration on the shared drive (${CONFIG_LINK_RELATIVE_PATH}), but no usable copy could be read.` });
   } else if (context.mode === "legacy") {
     checks.push({ status: "warn", code: "legacy-mode", message: "Project instructions exist, but .nemeda/agent-kit.json is missing." });
   } else {
@@ -650,7 +758,9 @@ export function workspaceDoctor(start = defaultWorkspaceDirectory()) {
     checks.push(
       gitRoot
         ? { status: "pass", code: "git-repository", message: `Git repository detected at ${gitRoot}.` }
-        : { status: "warn", code: "git-repository", message: "Configured root is not inside a Git repository." }
+        : driveHosted
+          ? { status: "pass", code: "git-repository", message: "The workspace folder is not a Git repository, which is fine: its configuration comes from the shared drive." }
+          : { status: "warn", code: "git-repository", message: "Configured root is not inside a Git repository." }
     );
     const hasAgents = existsSync(path.join(context.root, "AGENTS.md"));
     const hasClaude = existsSync(path.join(context.root, "CLAUDE.md"));
@@ -966,6 +1076,9 @@ export function initializeWorkspace(start = defaultWorkspaceDirectory(), options
   const configPath = path.join(root, CONFIG_RELATIVE_PATH);
   const agentsPath = path.join(root, "AGENTS.md");
   if (existsSync(configPath)) throw new Error(`${CONFIG_RELATIVE_PATH} already exists; no files were changed.`);
+  if (existsSync(path.join(root, CONFIG_LINK_RELATIVE_PATH))) {
+    throw new Error(`${CONFIG_LINK_RELATIVE_PATH} already exists: this workspace takes its configuration from the shared drive; no files were changed.`);
+  }
 
   const inferredId = slugify(path.basename(root));
   const projectId = slugify(options.projectId || inferredId);
@@ -1012,13 +1125,30 @@ function describeLink(linkPath, drivePath) {
   return known[base] || `synced with the shared drive (${drivePath})`;
 }
 
+function describeConfigSource(context) {
+  if (context.configSource === "drive") return `${context.configPath} (on the shared drive, through ${CONFIG_LINK_RELATIVE_PATH})`;
+  if (context.configSource === "drive-cache") return `cached copy of ${context.configPath} (the shared-drive copy could not be used; see the issues below)`;
+  return context.configPath;
+}
+
 export function formatContextForHook(context) {
+  const driveHosted = context.configSource === "drive" || context.configSource === "drive-cache";
+  if (context.mode === "configured" && !context.config && driveHosted) {
+    // Say why the kit is silent instead of injecting nothing.
+    return [
+      "Nemeda Agent Kit repository context",
+      `Root: ${context.root}`,
+      `This workspace takes its configuration from the shared drive (${CONFIG_LINK_RELATIVE_PATH}), and no usable copy could be read:`,
+      ...context.issues.map((issue) => `- ${issue.level}: ${issue.message}`),
+      "Run `nemeda-agent doctor` for details; project context, meetings, and memory stay off until it is fixed."
+    ].join("\n");
+  }
   if (context.mode !== "configured" || !context.config) return "";
   const lines = [
     "Nemeda Agent Kit repository context",
     `Root: ${context.root}`,
     `Project: ${context.config.project.name} (${context.config.project.id})`,
-    `Configuration: ${context.configPath}`,
+    `Configuration: ${describeConfigSource(context)}`,
     `Required tools: ${(context.config.tools?.required || []).join(", ") || "none"}`,
     `Optional tools: ${(context.config.tools?.optional || []).join(", ") || "none"}`
   ];
@@ -1066,7 +1196,8 @@ export function formatContextForHook(context) {
   }
   for (const instruction of context.instructions) {
     if (instruction.content) {
-      lines.push(`\n--- ${instruction.path} ---\n${instruction.content.trim()}`);
+      const origin = instruction.source === "drive" ? " (from the shared drive)" : "";
+      lines.push(`\n--- ${instruction.path}${origin} ---\n${instruction.content.trim()}`);
     }
   }
   return lines.join("\n");

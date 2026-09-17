@@ -6,6 +6,7 @@ import {
   defaultWorkspaceDirectory,
   loadSchema,
   readWorkspaceContext,
+  unreadableConfigurationMessage,
   workspaceDoctor
 } from "./lib/workspace.mjs";
 
@@ -208,6 +209,8 @@ function toolResult(name, args = {}) {
   if (name === "workspace_config_schema") return textResult(loadSchema());
   if (name === "workspace_meetings") {
     const context = readWorkspaceContext(cwd);
+    const unreadable = unreadableConfigurationMessage(context);
+    if (unreadable) return textResult({ error: unreadable }, true);
     if (context.mode !== "configured" || !context.config?.meetings) {
       return textResult({ error: "No `meetings` section in .nemeda/agent-kit.json for this repository; see docs/meeting-capture.md." }, true);
     }

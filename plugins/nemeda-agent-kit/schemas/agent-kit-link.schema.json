@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:nemeda:agent-kit:link-schema:v1",
+  "title": "Nemeda Agent Kit configuration pointer",
+  "description": "Local .nemeda/agent-kit.link.json: names the shared drive that holds the workspace configuration (docs/drive-config-plan.md). Non-secret and identical on every machine.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "source"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sharedDrive"],
+      "properties": {
+        "provider": {
+          "enum": ["google", "onedrive"],
+          "default": "google",
+          "description": "Shared-storage client, as in drive.provider."
+        },
+        "sharedDrive": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Shared drive (or synced library) that holds the configuration; the drive copy must declare the same drive."
+        },
+        "path": {
+          "type": "string",
+          "pattern": "^(?!/)(?!.*(^|/)\\.\\.(/|$)).+\\.json$",
+          "default": "config/agent-kit.json",
+          "description": "Path of agent-kit.json inside the shared drive."
+        }
+      }
+    }
+  }
+}

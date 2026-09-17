@@ -38,7 +38,7 @@ import {
   writeState
 } from "./meetings-core.mjs";
 import { archiveRecording, generateNotes, recordMeetingMemory, sweepDeletions } from "./meetings-notes.mjs";
-import { readWorkspaceContext, validateConfig } from "./workspace.mjs";
+import { readWorkspaceContext, unreadableConfigurationMessage, validateConfig } from "./workspace.mjs";
 
 export * from "./meetings-core.mjs";
 
@@ -56,6 +56,8 @@ export function resolveMeetings(start, options = {}) {
   if (context.mode !== "configured") {
     throw new Error("No .nemeda/agent-kit.json found; run `nemeda-agent init` first.");
   }
+  const unreadable = unreadableConfigurationMessage(context);
+  if (unreadable) throw new Error(unreadable);
   if (validateConfig(context.config).some((issue) => issue.level === "error")) {
     throw new Error("Configuration is invalid; run `nemeda-agent doctor` and fix it before processing meetings.");
   }

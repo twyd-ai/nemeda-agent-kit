@@ -13,7 +13,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { processRecordings } from "./meetings.mjs";
 import { stateDirectory } from "./slack.mjs";
-import { readWorkspaceContext } from "./workspace.mjs";
+import { readWorkspaceContext, unreadableConfigurationMessage } from "./workspace.mjs";
 
 const PLUGIN_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 export const DEFAULT_INTERVAL_SECONDS = 30;
@@ -48,6 +48,8 @@ export function watchTick(start, options = {}, log = console.log) {
 export async function runMeetingWatch(start, { intervalSeconds = DEFAULT_INTERVAL_SECONDS, once = false, environment = process.env, engine, skipNotes, log = console.log, sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)) } = {}) {
   const interval = Math.max(5, Number(intervalSeconds) || DEFAULT_INTERVAL_SECONDS);
   const context = readWorkspaceContext(start);
+  const unreadable = unreadableConfigurationMessage(context);
+  if (unreadable) throw new Error(unreadable);
   if (context.mode !== "configured" || !context.config?.meetings) {
     throw new Error("No `meetings` section in .nemeda/agent-kit.json; nothing to watch.");
   }
@@ -144,6 +146,8 @@ WantedBy=default.target
 
 export function installMeetingService(start, { environment = process.env, platform = process.platform, intervalSeconds = DEFAULT_INTERVAL_SECONDS, dryRun = false } = {}) {
   const context = readWorkspaceContext(start);
+  const unreadable = unreadableConfigurationMessage(context);
+  if (unreadable) throw new Error(unreadable);
   if (context.mode !== "configured" || !context.config?.meetings) {
     throw new Error("No `meetings` section in .nemeda/agent-kit.json; nothing to install.");
   }
@@ -181,6 +185,8 @@ export function installMeetingService(start, { environment = process.env, platfo
 
 export function uninstallMeetingService(start, { environment = process.env, platform = process.platform, dryRun = false } = {}) {
   const context = readWorkspaceContext(start);
+  const unreadable = unreadableConfigurationMessage(context);
+  if (unreadable) throw new Error(unreadable);
   if (context.mode !== "configured" || !context.config?.meetings) {
     throw new Error("No `meetings` section in .nemeda/agent-kit.json; nothing to uninstall.");
   }
