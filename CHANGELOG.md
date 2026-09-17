@@ -21,6 +21,13 @@
 
 - The central memory client refuses HTTP redirects, so a redirect can never
   carry the personal token to another host.
+- `memory.central.tokenVariable` and `urlVariable` must start with
+  `NEMEDA_MEMORY_`, so a configuration can never make the kit send another
+  secret (an Airtable or Slack token) as its bearer token.
+- The central memory origin and the promoted project are pinned: a
+  workspace pins them on first use, and a later change sends nothing until
+  a person confirms it with `nemeda-agent memory trust` at an interactive
+  terminal. `doctor` reports `central-origin` and `central-project`.
 
 ## 0.4.0 — 2026-09-15
 

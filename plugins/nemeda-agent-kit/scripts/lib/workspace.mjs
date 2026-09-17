@@ -342,6 +342,7 @@ function validateMeetings(meetings, issues) {
 const MEMORY_STORE_TYPES = ["journal", "sqlite-file"];
 const MEMORY_PROMOTE_VALUES = ["reviewed", "all"];
 const ENV_VARIABLE_NAME_PATTERN = /^[A-Z][A-Z0-9_]*$/;
+const MEMORY_VARIABLE_NAME_PATTERN = /^NEMEDA_MEMORY_[A-Z0-9_]+$/;
 
 // See docs/memory-plan.md. `memory.project` is the local journal/index
 // layer; `memory.central` is an optional connection to a database
@@ -377,11 +378,14 @@ function validateMemory(memory, issues) {
         const problem = serviceUrlProblem(memory.central.mcpUrl);
         if (problem) issues.push({ level: "error", code: "invalid-memory", message: `memory.central.mcpUrl ${problem}.` });
       }
-      if (memory.central.tokenVariable !== undefined && (typeof memory.central.tokenVariable !== "string" || !ENV_VARIABLE_NAME_PATTERN.test(memory.central.tokenVariable))) {
-        issues.push({ level: "error", code: "invalid-memory", message: "memory.central.tokenVariable must be an environment variable name (e.g. NEMEDA_MEMORY_TOKEN), not the token itself." });
+      // NEMEDA_MEMORY_ prefix: the kit sends the token variable's value to the
+      // service, so a name like AIRTABLE_API_KEY would leak that secret
+      // (docs/drive-config-plan.md, guard 2).
+      if (memory.central.tokenVariable !== undefined && (typeof memory.central.tokenVariable !== "string" || !MEMORY_VARIABLE_NAME_PATTERN.test(memory.central.tokenVariable))) {
+        issues.push({ level: "error", code: "invalid-memory", message: "memory.central.tokenVariable must be an environment variable name starting with NEMEDA_MEMORY_ (e.g. NEMEDA_MEMORY_TOKEN), not the token itself." });
       }
-      if (memory.central.urlVariable !== undefined && (typeof memory.central.urlVariable !== "string" || !ENV_VARIABLE_NAME_PATTERN.test(memory.central.urlVariable))) {
-        issues.push({ level: "error", code: "invalid-memory", message: "memory.central.urlVariable must be an environment variable name (e.g. NEMEDA_MEMORY_DB_URL), not the connection string itself." });
+      if (memory.central.urlVariable !== undefined && (typeof memory.central.urlVariable !== "string" || !MEMORY_VARIABLE_NAME_PATTERN.test(memory.central.urlVariable))) {
+        issues.push({ level: "error", code: "invalid-memory", message: "memory.central.urlVariable must be an environment variable name starting with NEMEDA_MEMORY_ (e.g. NEMEDA_MEMORY_DB_URL), not the connection string itself." });
       }
       for (const field of ["schema", "projectId"]) {
         if (memory.central[field] !== undefined && (typeof memory.central[field] !== "string" || !memory.central[field].trim())) {
@@ -692,7 +696,7 @@ export function workspaceDoctor(start = defaultWorkspaceDirectory()) {
     if (context.config.workspace?.repositories) repositoryDoctorChecks(context.root, context.config.workspace.repositories, checks);
     if (context.config.airtable) airtableDoctorChecks(context.root, context.config.airtable, checks);
     if (context.config.memory) memoryDoctorChecks(context.root, context.config.memory, checks);
-    if (context.config.memory?.central) checks.push(...centralOfflineChecks(context.root, context.config));
+    if (context.config.memory?.central) checks.push(...centralOfflineChecks(context.root, context.config, process.env, { configSource: context.configSource }));
     if (context.config.meetings) checks.push(...meetingDoctorChecks(context.root, context.config.meetings, context.config.drive, process.env, { memoryConfigured: Boolean(context.config.memory), projectId: context.config.project.id }));
   }
   return { root: context.root, mode: context.mode, checks };

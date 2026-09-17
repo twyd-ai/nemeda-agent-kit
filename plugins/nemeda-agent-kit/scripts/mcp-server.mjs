@@ -156,11 +156,12 @@ const listedTools = CENTRAL_PROXY ? [...tools, ...centralTools] : tools;
 
 async function proxyCentralTool(cwd, name, args) {
   const context = readWorkspaceContext(cwd);
-  const settings = context.mode === "configured" ? centralSettings(context.config) : null;
+  const settings = context.mode === "configured" ? centralSettings(context.config, { configSource: context.configSource }) : null;
   if (!settings?.baseUrl) {
     return textResult({ error: "No memory.central.mcpUrl in .nemeda/agent-kit.json for this repository; central memory is not configured here (see docs/memory-plan.md)." }, true);
   }
-  const { token } = resolveCentralToken(context.root, settings);
+  const { token, reason, message } = resolveCentralToken(context.root, settings);
+  if (reason) return textResult({ error: message }, true);
   if (!token) return textResult({ error: `No token for the memory service: set ${settings.tokenVariable} in ~/.nemeda/.env.local.` }, true);
   const { cwd: _cwd, ...forwarded } = args;
   try {

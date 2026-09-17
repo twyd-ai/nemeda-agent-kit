@@ -14,9 +14,14 @@ import { statSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { ENV_LOCAL_NAME, loadEnvLocal } from "./env.mjs";
+import { evaluateCentralPins } from "./memory-pins.mjs";
 
 export const CENTRAL_CONTRACT_MAJOR = 1;
 export const DEFAULT_TOKEN_VARIABLE = "NEMEDA_MEMORY_TOKEN";
+// Only variables with this prefix are ever read as a token or a connection
+// string: a configuration naming AIRTABLE_API_KEY or SLACK_BOT_TOKEN must not
+// make the kit send that secret anywhere (docs/drive-config-plan.md, guard 2).
+export const MEMORY_VARIABLE_PATTERN = /^NEMEDA_MEMORY_[A-Z0-9_]+$/;
 // The service's read-only MCP tools the kit's stdio server proxies for hosts
 // that cannot connect to the service directly (Codex, Cursor). The write
 // tool, memory_central_promote, is deliberately absent: promotion goes
@@ -63,21 +68,31 @@ export function serviceBaseUrl(mcpUrl) {
 }
 
 // Normalized `memory.central`, or null when it is not configured.
-export function centralSettings(config) {
+// `configSource` ("repository", "drive", "drive-cache") comes from the
+// workspace context and decides whether a first use may pin itself silently.
+// A token variable without the NEMEDA_MEMORY_ prefix is dropped here too, so
+// a configuration loaded despite a validation error still never reads it.
+export function centralSettings(config, { configSource } = {}) {
   const central = config?.memory?.central;
   if (!central || typeof central !== "object") return null;
   let baseUrl = null;
   if (central.mcpUrl && !serviceUrlProblem(central.mcpUrl)) baseUrl = serviceBaseUrl(central.mcpUrl);
+  const tokenVariable = central.tokenVariable || DEFAULT_TOKEN_VARIABLE;
+  const tokenVariableAllowed = MEMORY_VARIABLE_PATTERN.test(tokenVariable);
   return {
     mcpUrl: baseUrl ? central.mcpUrl : null,
     baseUrl,
-    tokenVariable: central.tokenVariable || DEFAULT_TOKEN_VARIABLE,
+    tokenVariable: tokenVariableAllowed ? tokenVariable : null,
+    invalidTokenVariable: tokenVariableAllowed ? null : String(tokenVariable),
     projectId: central.projectId || config.project?.id,
     promote: central.promote || "reviewed",
     urlVariable: central.urlVariable || null,
-    schema: central.schema || "nemeda_memory"
+    schema: central.schema || "nemeda_memory",
+    configSource: configSource || "repository"
   };
 }
+
+const PIN_CHECK_CODES = { "untrusted-origin": "central-origin", "untrusted-project": "central-project", "invalid-token-variable": "memory-central" };
 
 // ~/.nemeda, the per-person home the Slack bridge already uses
 // (NEMEDA_HOME overrides it, as there).
@@ -89,7 +104,27 @@ export function personalHome(environment = process.env) {
 // ~/.nemeda/.env.local (where it belongs: it is per person, not per project),
 // then the workspace .env.local. Returns where it came from so doctor can
 // say so, never the value in any message.
-export function resolveCentralToken(root, settings, environment = process.env) {
+//
+// This is the step every consumer takes before sending the token (sync,
+// search --central, the MCP proxy, doctor, the automatic sync), so the pins
+// are checked here: an origin or project this workspace was not trusted with
+// yields no token and a `reason` ("untrusted-origin", "untrusted-project",
+// "invalid-token-variable") with a message naming both values and the command
+// that resolves it. `recordFirstUse: false` (doctor) never records a pin.
+export function resolveCentralToken(root, settings, environment = process.env, { recordFirstUse = true } = {}) {
+  if (settings?.invalidTokenVariable) {
+    return {
+      token: null,
+      source: null,
+      variable: settings.invalidTokenVariable,
+      reason: "invalid-token-variable",
+      message: `memory.central.tokenVariable is ${settings.invalidTokenVariable}; the kit only reads variables named NEMEDA_MEMORY_*, so no token is sent.`
+    };
+  }
+  if (root && settings?.mcpUrl) {
+    const pins = evaluateCentralPins(root, { mcpUrl: settings.mcpUrl, projectId: settings.projectId, configSource: settings.configSource }, environment, { recordFirstUse });
+    if (!pins.trusted) return { token: null, source: null, variable: settings.tokenVariable, reason: pins.reason, message: pins.message };
+  }
   const name = settings?.tokenVariable || DEFAULT_TOKEN_VARIABLE;
   const { value, source } = resolvePersonalVariable(root, name, environment);
   return { token: value, source, variable: name };
@@ -138,9 +173,10 @@ function missingTokenMessage(settings, environment = process.env) {
 }
 
 export function requireCentralToken(root, settings, environment = process.env) {
-  const { token } = resolveCentralToken(root, settings, environment);
-  if (!token) throw new CentralError("no-token", missingTokenMessage(settings, environment));
-  return token;
+  const resolved = resolveCentralToken(root, settings, environment);
+  if (resolved.reason) throw new CentralError(resolved.reason, resolved.message);
+  if (!resolved.token) throw new CentralError("no-token", missingTokenMessage(settings, environment));
+  return resolved.token;
 }
 
 function errorDetail(text) {
@@ -329,11 +365,12 @@ function noServiceCheck(settings) {
 // workspace_doctor MCP tool, which never touch the network: configuration
 // and token presence only (never the token itself). `nemeda-agent memory
 // doctor` runs the online ones.
-export function centralOfflineChecks(root, config, environment = process.env) {
-  const settings = centralSettings(config);
+export function centralOfflineChecks(root, config, environment = process.env, { configSource } = {}) {
+  const settings = centralSettings(config, { configSource });
   if (!settings) return [];
   if (!settings.baseUrl) return [noServiceCheck(settings)];
-  const { source } = resolveCentralToken(root, settings, environment);
+  const { source, reason, message } = resolveCentralToken(root, settings, environment, { recordFirstUse: false });
+  if (reason) return [{ status: "fail", code: PIN_CHECK_CODES[reason], message }];
   if (!source) return [{ status: "warn", code: "memory-central", message: missingTokenMessage(settings, environment) }];
   const where = source === "environment" ? `the ${settings.tokenVariable} environment variable` : source;
   return [{ status: "pass", code: "memory-central", message: `Central memory through ${settings.baseUrl}, token from ${where}; \`nemeda-agent memory doctor\` checks the service itself.` }];
@@ -347,8 +384,8 @@ function projectListed(listing, projectId) {
 
 // Online checks for `nemeda-agent memory doctor`. Never throws: every
 // failure becomes a check row.
-export async function centralDoctorChecks(root, config, { environment = process.env, fetchImpl, platform = process.platform } = {}) {
-  const settings = centralSettings(config);
+export async function centralDoctorChecks(root, config, { environment = process.env, fetchImpl, platform = process.platform, configSource } = {}) {
+  const settings = centralSettings(config, { configSource });
   const checks = [];
   if (!settings) return checks;
   if (!settings.baseUrl) return [noServiceCheck(settings)];
@@ -373,7 +410,11 @@ export async function centralDoctorChecks(root, config, { environment = process.
     checks.push({ status: "fail", code: "memory-central", message: error instanceof Error ? error.message : String(error) });
   }
 
-  const { token, source } = resolveCentralToken(root, settings, environment);
+  const { token, source, reason, message } = resolveCentralToken(root, settings, environment, { recordFirstUse: false });
+  if (reason) {
+    checks.push({ status: "fail", code: PIN_CHECK_CODES[reason], message });
+    return checks;
+  }
   if (!token) {
     checks.push({ status: "warn", code: "memory-central-token", message: missingTokenMessage(settings, environment) });
     return checks;

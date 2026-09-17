@@ -390,13 +390,13 @@
             },
             "tokenVariable": {
               "type": "string",
-              "pattern": "^[A-Z][A-Z0-9_]*$",
+              "pattern": "^NEMEDA_MEMORY_[A-Z0-9_]+$",
               "default": "NEMEDA_MEMORY_TOKEN",
               "description": "Name of the variable holding the personal service token, read from the environment or ~/.nemeda/.env.local; never the token itself."
             },
             "urlVariable": {
               "type": "string",
-              "pattern": "^[A-Z][A-Z0-9_]*$",
+              "pattern": "^NEMEDA_MEMORY_[A-Z0-9_]+$",
               "description": "Administrators only (memory sync --via psql): name of the .env.local variable holding a personal connection string; never the value itself. Required only when mcpUrl is absent."
             },
             "schema": {

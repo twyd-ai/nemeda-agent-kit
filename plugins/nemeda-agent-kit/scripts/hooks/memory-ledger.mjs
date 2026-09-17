@@ -39,8 +39,11 @@ try {
         spawnDetachedHarvest(workspace.root, { environment: process.env });
         lines.push(`Project memory: summarising ${decision.closed} earlier session${decision.closed === 1 ? "" : "s"} in the background; the resulting entries land as pending review (log: .nemeda/state/harvest.log).`);
       }
-      if (shouldTriggerSync(workspace.root, workspace.config, process.env).trigger) {
+      const syncDecision = shouldTriggerSync(workspace.root, workspace.config, process.env, { configSource: workspace.configSource });
+      if (syncDecision.trigger) {
         spawnDetachedSync(workspace.root, { environment: process.env });
+      } else if (syncDecision.paused) {
+        lines.push(`Central memory: the automatic sync is paused. ${syncDecision.reason}`);
       }
       const pending = pendingReviewCount(workspace.root, workspace.config, process.env);
       if (pending > 0) {

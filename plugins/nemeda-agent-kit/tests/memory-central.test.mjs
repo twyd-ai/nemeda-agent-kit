@@ -187,9 +187,12 @@ test("memory sync stops on a missing or rejected token without leaking it", asyn
     const root = workspace(stub.url);
     seed(root);
     const config = readConfig(root);
-    await assert.rejects(syncToCentral(root, config, { environment: { NEMEDA_HOME: emptyHome() } }), (error) => error instanceof CentralError && error.code === "no-token");
+    // One person throughout: the first sync pins this workspace's origin for
+    // them, and a different NEMEDA_HOME would be a person who has not trusted it.
+    const home = emptyHome();
+    await assert.rejects(syncToCentral(root, config, { environment: { NEMEDA_HOME: home } }), (error) => error instanceof CentralError && error.code === "no-token");
     await assert.rejects(
-      syncToCentral(root, config, { environment: { NEMEDA_HOME: emptyHome(), NEMEDA_MEMORY_TOKEN: "wrong-secret" } }),
+      syncToCentral(root, config, { environment: { NEMEDA_HOME: home, NEMEDA_MEMORY_TOKEN: "wrong-secret" } }),
       (error) => error instanceof CentralError && error.code === "unauthenticated" && !error.message.includes("wrong-secret")
     );
     assert.match(readSyncState(root).lastError, /401/);

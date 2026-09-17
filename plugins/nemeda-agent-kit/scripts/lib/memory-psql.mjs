@@ -71,6 +71,9 @@ export function psqlConnection(root, settings, environment = process.env) {
   if (!settings?.urlVariable) {
     throw new CentralError("psql-config", "memory.central.urlVariable is not set; `--via psql` needs the name of the variable holding an administrator's connection string.");
   }
+  if (!/^NEMEDA_MEMORY_[A-Z0-9_]+$/.test(settings.urlVariable)) {
+    throw new CentralError("psql-config", `memory.central.urlVariable is ${settings.urlVariable}; the connection string variable must start with NEMEDA_MEMORY_.`);
+  }
   if (!SCHEMA_NAME_PATTERN.test(settings.schema)) throw new CentralError("psql-config", "memory.central.schema must be a plain lower-case identifier.");
   const { value } = resolvePersonalVariable(root, settings.urlVariable, environment);
   if (!value) throw new CentralError("psql-config", `No connection string: set ${settings.urlVariable} in .env.local (administrators only; never committed).`);

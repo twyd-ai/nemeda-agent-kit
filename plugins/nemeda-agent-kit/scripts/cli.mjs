@@ -62,6 +62,7 @@ function parseArguments(argv) {
     else if (command === "meeting" && options.subcommand === "process" && !options.file && !value.startsWith("-")) options.file = value;
     else if (command === "memory" && options.subcommand === "search" && !options.query && !value.startsWith("-")) options.query = value;
     else if (command === "memory" && options.subcommand === "review" && !options.reviewId && !value.startsWith("-")) options.reviewId = value;
+    else if (command === "memory" && options.subcommand === "trust" && !options.trustUrl && !value.startsWith("-")) options.trustUrl = value;
     else if (command === "slack" && ["ask", "join", "server"].includes(options.subcommand) && !options.question) options.question = value;
     else throw new Error(`Unknown argument: ${value}`);
   }
@@ -109,6 +110,7 @@ Usage:
   nemeda-agent memory recap --period PERIOD [--host claude|codex] [--dry-run] [--json]
   nemeda-agent memory close [--host claude|codex] [--dry-run | --yes] [--json]
   nemeda-agent memory reopen [--dry-run | --yes] [--json]
+  nemeda-agent memory trust [URL]
   nemeda-agent memory import-airtable [--base appXXX] [--table NAME] [--team-table NAME] [--alias FROM=TO ...] [--dry-run] [--json]
 
 Commands:
@@ -217,6 +219,11 @@ Commands:
                        project closed in central memory. --dry-run
                        previews the digest; --yes does it
              reopen    undo a close with a reopen digest (--yes)
+             trust     confirm the central memory service and project this
+                       workspace sends your token and entries to, after a
+                       change (or a drive-hosted configuration's first use).
+                       Needs a person at an interactive terminal typing the
+                       service host; agents and scripts cannot confirm it
              import-airtable
                        migrate an Airtable Knowledge Log (--base, else
                        airtable.baseId; --table, default "Knowledge Log")
@@ -418,6 +425,16 @@ async function runMeeting(options) {
   throw new Error(`Unknown meeting subcommand: ${subcommand}; use process, list, notes, doctor, setup, watch, install, or uninstall.`);
 }
 
+async function promptLine(question) {
+  const { createInterface } = await import("node:readline/promises");
+  const reader = createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    return await reader.question(question);
+  } finally {
+    reader.close();
+  }
+}
+
 async function readStdin() {
   if (process.stdin.isTTY) return "";
   let input = "";
@@ -502,7 +519,7 @@ async function runMemory(options) {
   if (subcommand === "search" && options.central) {
     if (!options.query) throw new Error('memory search needs a query: nemeda-agent memory search "..." --central');
     const central = await import("./lib/memory-central.mjs");
-    const settings = central.centralSettings(context.config);
+    const settings = central.centralSettings(context.config, { configSource: context.configSource });
     if (!settings) throw new Error("No memory.central section in .nemeda/agent-kit.json; see docs/memory-plan.md, \"Configuration\".");
     const token = central.requireCentralToken(context.root, settings);
     const result = await central.callCentralTool(settings, token, "memory_central_search", {
@@ -573,13 +590,43 @@ async function runMemory(options) {
   if (subcommand === "sync") {
     if (options.via && !["service", "psql"].includes(options.via)) throw new Error(`Unknown --via ${options.via}; use service (default) or psql.`);
     const { describeSyncError, syncToCentral } = await import("./lib/memory-sync.mjs");
-    const report = await syncToCentral(context.root, context.config, { dryRun: Boolean(options.dryRun), all: Boolean(options.all), via: options.via || "service" });
+    const report = await syncToCentral(context.root, context.config, { dryRun: Boolean(options.dryRun), all: Boolean(options.all), via: options.via || "service", configSource: context.configSource });
     if (options.json) {
       print(report, true);
       return report.errors.length ? 1 : 0;
     }
     printSyncReport(report, describeSyncError);
     return report.errors.length ? 1 : 0;
+  }
+
+  if (subcommand === "trust") {
+    const central = await import("./lib/memory-central.mjs");
+    const pins = await import("./lib/memory-pins.mjs");
+    const settings = central.centralSettings(context.config, { configSource: context.configSource });
+    if (!settings) throw new Error("No memory.central section in the workspace configuration; there is nothing to trust.");
+    const plan = pins.describeCentralTrust(context.root, settings);
+    if (options.trustUrl && pins.serviceOrigin(options.trustUrl) !== plan.origin) {
+      throw new Error(`This workspace uses ${plan.origin || "no service URL"}, not ${pins.serviceOrigin(options.trustUrl) || options.trustUrl}; trust the URL its configuration names, or change the configuration first.`);
+    }
+    console.log(`Workspace ${context.root} (${plan.configSource} configuration):`);
+    console.log(`  central memory service: ${plan.origin || "(none; --via psql only)"}`);
+    console.log(`  promotes to project:    ${plan.projectId}`);
+    if (!plan.changes.length) {
+      console.log("Already trusted; nothing to confirm.");
+      return 0;
+    }
+    for (const change of plan.changes) console.log(`  ${change.kind}: ${change.from || "(not trusted yet)"} -> ${change.to}`);
+    // Trusting decides where a person's token and a project's memory go, so
+    // it needs a person: an agent or a script has no interactive terminal.
+    if (!process.stdin.isTTY || !process.stdout.isTTY) {
+      throw new Error("memory trust needs a person at an interactive terminal: it decides where your token and this project's memory go, so an agent or a script cannot confirm it. Run it yourself in a terminal.");
+    }
+    const expected = plan.origin ? new URL(plan.origin).host : plan.projectId;
+    const answer = await promptLine(`Type ${expected} to trust it: `);
+    if (answer.trim() !== expected) throw new Error("Not confirmed; nothing changed.");
+    pins.trustCentralPins(context.root, { mcpUrl: settings.mcpUrl, projectId: settings.projectId });
+    console.log(`Trusted ${plan.origin || "the project"} as ${plan.projectId} for this workspace.`);
+    return 0;
   }
 
   if (subcommand === "import-airtable") {
@@ -628,7 +675,7 @@ async function runMemory(options) {
       if (!options.period) throw new Error("memory recap needs --period (YYYY, YYYY-Qn, or YYYY-MM).");
       result = recap.recapProject(context.root, context.config, { period: options.period, body, host, dryRun });
     } else {
-      result = await (subcommand === "close" ? recap.closeProject : recap.reopenProject)(context.root, context.config, { body, host, dryRun });
+      result = await (subcommand === "close" ? recap.closeProject : recap.reopenProject)(context.root, context.config, { body, host, dryRun, configSource: context.configSource });
     }
     if (options.json) {
       print(result, true);
@@ -655,7 +702,7 @@ async function runMemory(options) {
     let checks = workspaceDoctor(context.root).checks.filter((check) => check.code.startsWith("memory-") || check.code === "invalid-memory" || check.code === "deprecated-knowledge-log");
     if (context.config.memory.central) {
       // The online rows supersede the offline memory-central row.
-      checks = [...checks.filter((check) => check.code !== "memory-central"), ...(await central.centralDoctorChecks(context.root, context.config))];
+      checks = [...checks.filter((check) => check.code !== "memory-central"), ...(await central.centralDoctorChecks(context.root, context.config, { configSource: context.configSource }))];
       const { psqlDoctorChecks } = await import("./lib/memory-psql.mjs");
       checks.push(...psqlDoctorChecks(context.root, context.config));
       const settings = central.centralSettings(context.config);

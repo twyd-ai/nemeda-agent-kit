@@ -172,19 +172,19 @@ function requireService(config, command) {
 // The last step of a project: a closure digest covering its whole reviewed
 // history, then one sync of every author's entries and digests, so central
 // memory holds everything and projects_status turns the project inactive.
-export async function closeProject(root, config, { body, host = "claude", dryRun = false, environment = process.env, fetchImpl, now = () => new Date() } = {}) {
+export async function closeProject(root, config, { body, host = "claude", dryRun = false, environment = process.env, fetchImpl, configSource, now = () => new Date() } = {}) {
   requireService(config, "close");
   const memoryRoot = path.join(root, config.memory.project.path);
   const entries = recapEntries(readAllJournals(memoryRoot).entries);
   const { digest, generatedWith } = prepareDigest(root, config, { kind: "closure", period: today(now), body, host, environment, entries });
   if (dryRun) return { digest, file: null, entries: entries.length, generatedWith, dryRun, sync: null };
   const file = writeDigest(memoryRoot, digest);
-  const sync = await syncToCentral(root, config, { environment, fetchImpl, all: true, now });
+  const sync = await syncToCentral(root, config, { environment, fetchImpl, all: true, configSource, now });
   return { digest, file, entries: entries.length, generatedWith, dryRun, sync };
 }
 
 // Undoes a close: one more digest (kind reopen), never an update.
-export async function reopenProject(root, config, { body, dryRun = false, environment = process.env, fetchImpl, now = () => new Date() } = {}) {
+export async function reopenProject(root, config, { body, dryRun = false, environment = process.env, fetchImpl, configSource, now = () => new Date() } = {}) {
   requireService(config, "reopen");
   const author = resolveAuthorEmail(root);
   const date = today(now);
@@ -193,6 +193,6 @@ export async function reopenProject(root, config, { body, dryRun = false, enviro
   if (dryRun) return { digest, file: null, dryRun, sync: null };
   const memoryRoot = path.join(root, config.memory.project.path);
   const file = writeDigest(memoryRoot, digest);
-  const sync = await syncToCentral(root, config, { environment, fetchImpl, all: true, now });
+  const sync = await syncToCentral(root, config, { environment, fetchImpl, all: true, configSource, now });
   return { digest, file, dryRun, sync };
 }

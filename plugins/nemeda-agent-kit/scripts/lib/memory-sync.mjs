@@ -10,6 +10,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { latestRevisions, readAllJournals, resolveAuthorEmail } from "./memory.mjs";
 import { CentralError, centralSettings, promoteBatch, requireCentralToken, resolveCentralToken } from "./memory-central.mjs";
+import { evaluateCentralPins } from "./memory-pins.mjs";
 import { readDigests } from "./memory-digest.mjs";
 import { checkSchemaVersion, promoteViaPsql, psqlConnection } from "./memory-psql.mjs";
 
@@ -131,6 +132,10 @@ function psqlTransport(root, settings, environment) {
   return {
     endpoint: `psql (${settings.urlVariable})`,
     open() {
+      // No token travels on this path, but the project pin still decides
+      // which central project these rows may be written into (guard 4).
+      const pins = evaluateCentralPins(root, { mcpUrl: settings.mcpUrl, projectId: settings.projectId, configSource: settings.configSource }, environment);
+      if (!pins.trusted) throw new CentralError(pins.reason, pins.message);
       const connection = psqlConnection(root, settings, environment);
       const promotedBy = resolveAuthorEmail(root);
       if (!promotedBy) throw new Error("git config user.email is not set; `--via psql` records it as promoted_by.");
@@ -147,8 +152,8 @@ function psqlTransport(root, settings, environment) {
 // problems that stop the whole run (no service, no token, unreachable,
 // 401/403, psql failure); per-row refusals come back in `errors` and those
 // rows are retried by the next sync.
-export async function syncToCentral(root, config, { environment = process.env, fetchImpl, dryRun = false, all = false, via = "service", now = () => new Date() } = {}) {
-  const settings = centralSettings(config);
+export async function syncToCentral(root, config, { environment = process.env, fetchImpl, dryRun = false, all = false, via = "service", configSource, now = () => new Date() } = {}) {
+  const settings = centralSettings(config, { configSource });
   if (!settings) throw new Error("No memory.central section in .nemeda/agent-kit.json; see docs/memory-plan.md, \"Configuration\".");
   const transport = via === "psql" ? psqlTransport(root, settings, environment) : serviceTransport(root, settings, environment, fetchImpl);
   const author = all ? undefined : resolveAuthorEmail(root);
@@ -248,13 +253,17 @@ export function syncLogPath(root) {
 // default once memory.central.mcpUrl and a token exist (the committed config
 // is the project's opt-in, the personal token the person's);
 // MEMORY_SYNC_AUTO=false in .env.local turns it off on one machine.
-export function shouldTriggerSync(root, config, environment = process.env, { now = Date.now() } = {}) {
-  const settings = centralSettings(config);
+export function shouldTriggerSync(root, config, environment = process.env, { now = Date.now(), configSource } = {}) {
+  const settings = centralSettings(config, { configSource });
   if (!settings?.baseUrl) return { trigger: false, reason: "memory.central.mcpUrl is not set" };
   if (["false", "0", "no", "off"].includes(String(environment.MEMORY_SYNC_AUTO || "").trim().toLowerCase())) {
     return { trigger: false, reason: "MEMORY_SYNC_AUTO is off" };
   }
-  if (!resolveCentralToken(root, settings, environment).token) return { trigger: false, reason: "no token for the memory service" };
+  const resolved = resolveCentralToken(root, settings, environment);
+  // An untrusted origin or project pauses the automatic sync; the hook tells
+  // the next session why and which command resumes it, and never prompts.
+  if (resolved.reason) return { trigger: false, reason: resolved.message, paused: true };
+  if (!resolved.token) return { trigger: false, reason: "no token for the memory service" };
   const last = Date.parse(readSyncState(root).lastAttemptAt || "");
   if (Number.isFinite(last) && now - last < AUTO_SYNC_INTERVAL_MS) return { trigger: false, reason: "a sync ran less than 12 h ago" };
   return { trigger: true };

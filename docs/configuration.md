@@ -634,7 +634,9 @@ database: people authenticate to the service with a personal token.
   endpoint; `https://` only (plain `http://` is accepted for localhost).
   Shared and non-secret, so it belongs in the committed config.
 - `tokenVariable`: the *name* of the variable holding your personal token,
-  default `NEMEDA_MEMORY_TOKEN`. Put the token in `~/.nemeda/.env.local` (it
+  default `NEMEDA_MEMORY_TOKEN`. It must start with `NEMEDA_MEMORY_`
+  (so must `urlVariable`): the kit sends its value to the service, so it
+  never reads any other secret. Put the token in `~/.nemeda/.env.local` (it
   is per person, not per project; `chmod 600` the file); the process
   environment and the workspace `.env.local` also work. Never commit it.
 - `projectId`: the central project this workspace promotes into; defaults
@@ -682,6 +684,19 @@ entries and digests, which marks the project closed in central memory
 (`--dry-run` previews the digest first). `nemeda-agent memory reopen --yes`
 undoes it with a reopen digest; nothing in central memory is ever updated
 or deleted.
+
+The first time a workspace uses central memory, the kit pins the service
+it talks to and the project it promotes into: the service origin for you in
+`~/.nemeda/central-origins.json`, the origin and `projectId` for the
+workspace in `.nemeda/state/pins.json`. A repository-hosted configuration
+pins itself silently on that first use. If `mcpUrl` or `projectId` later
+changes, or the configuration comes from a shared drive, `memory sync`,
+`memory search --central`, the MCP proxy, and the automatic sync send
+nothing until you confirm with `nemeda-agent memory trust`. That command
+shows what changed and asks you to type the service host. It only runs at an
+interactive terminal, so an agent or a script cannot confirm it for you.
+`doctor` reports an unconfirmed change as `central-origin` or
+`central-project`, and never pins anything itself.
 
 In agent sessions, Claude Desktop and Claude Code connect to the service
 directly as an MCP connector (Entra sign-in). Codex and Cursor get the same

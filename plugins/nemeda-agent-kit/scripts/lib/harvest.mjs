@@ -106,7 +106,7 @@ export function resolveMemoryHookWorkspace(event = {}, environment = process.env
   if (context.mode !== "configured" || !context.config?.memory) return null;
   if (validateConfig(context.config).some((issue) => issue.level === "error")) return null;
   loadEnvLocal(context.root, environment);
-  return { root: context.root, config: context.config };
+  return { root: context.root, config: context.config, configSource: context.configSource };
 }
 
 // One entry per host CLI capable of resuming a past session non-interactively.
