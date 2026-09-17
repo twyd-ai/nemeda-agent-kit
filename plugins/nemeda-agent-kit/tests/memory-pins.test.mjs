@@ -163,6 +163,7 @@ test("confirmWorkspaceTrust pins only after the person types the host, recording
   const environment = personalEnvironment();
   const config = baseConfig({ mcpUrl: "https://memory.example.ts.net/mcp" });
   const root = workspace(config);
+  mkdirSync(path.join(root, "memory"), { recursive: true });
 
   const wrong = fakeTerminal("memory.example.com");
   await assert.rejects(confirmWorkspaceTrust(root, config, { configSource: "drive", environment, input: wrong.input, output: wrong.output }), /Not confirmed/);
@@ -172,7 +173,10 @@ test("confirmWorkspaceTrust pins only after the person types the host, recording
   const result = await confirmWorkspaceTrust(root, config, { configSource: "drive", via: "init --from-drive", environment, input: right.input, output: right.output });
   assert.equal(result.trusted, true);
   assert.match(right.printed(), /origin: \(not trusted yet\) -> https:\/\/memory\.example\.ts\.net/);
-  assert.equal(JSON.parse(readFileSync(workspacePinsPath(root), "utf8")).central.via, "init --from-drive");
+  assert.match(right.printed(), /memory folder: \(not trusted yet\) -> \.\/memory/, "the person sees where journals go");
+  const pinned = JSON.parse(readFileSync(workspacePinsPath(root), "utf8"));
+  assert.equal(pinned.central.via, "init --from-drive");
+  assert.equal(pinned.folders.memory.identity, "local:memory", "and the memory folder is pinned in the same step");
   assert.equal(resolveCentralToken(root, centralSettings(config, { configSource: "drive" }), environment).token, STUB_TOKEN);
 
   const again = fakeTerminal();

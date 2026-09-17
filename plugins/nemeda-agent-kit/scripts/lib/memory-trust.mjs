@@ -6,8 +6,19 @@
 // type the service host (or the project id when there is no service), so an
 // agent or a script cannot confirm it.
 import { createInterface } from "node:readline/promises";
+import { workspaceDriveEnvironment } from "./config-source.mjs";
 import { centralSettings } from "./memory-central.mjs";
-import { describeCentralTrust, pendingFolderChanges, serviceOrigin, trustCentralPins, trustPendingFolders } from "./memory-pins.mjs";
+import {
+  checkFolderPin,
+  describeCentralTrust,
+  describeFolderIdentity,
+  folderIdentity,
+  pendingFolderChanges,
+  readWorkspacePins,
+  serviceOrigin,
+  trustCentralPins,
+  trustPendingFolders
+} from "./memory-pins.mjs";
 
 // Returns { trusted, changes }: trusted is false when there was nothing to
 // confirm. Throws when the terminal is not interactive, the typed answer does
@@ -27,6 +38,15 @@ export async function confirmWorkspaceTrust(root, config, {
   const plan = settings
     ? describeCentralTrust(root, settings, environment)
     : { origin: null, projectId: config.project.id, configSource: configSource || "repository", changes: pendingFolderChanges(root) };
+  // A memory folder not pinned yet would otherwise pin itself silently on the
+  // first write, leaving a window in which a configuration edit could point
+  // it elsewhere unseen. The person confirming sees where journals go and
+  // pins it in the same step.
+  const memoryDestination = config.memory?.project?.path
+    ? folderIdentity(root, config.memory.project.path, config.drive, workspaceDriveEnvironment(root, environment))
+    : null;
+  const pinMemoryFolder = Boolean(memoryDestination?.identity) && memoryDestination.insideDrive !== false && !readWorkspacePins(root).folders?.memory;
+  if (pinMemoryFolder) plan.changes.push({ kind: "memory folder", from: null, to: describeFolderIdentity(memoryDestination.identity) });
   if (url && serviceOrigin(url) !== plan.origin) {
     throw new Error(`This workspace uses ${plan.origin || "no service URL"}, not ${serviceOrigin(url) || url}; trust the URL its configuration names, or change the configuration first.`);
   }
@@ -52,6 +72,7 @@ export async function confirmWorkspaceTrust(root, config, {
   if (String(answer).trim() !== expected) throw new Error("Not confirmed; nothing changed.");
   if (settings) trustCentralPins(root, { mcpUrl: settings.mcpUrl, projectId: settings.projectId }, environment, { via });
   trustPendingFolders(root);
+  if (pinMemoryFolder) checkFolderPin(root, "memory", memoryDestination, { recordFirstUse: true });
   log(`Trusted ${plan.changes.map((change) => change.kind).join(", ")} for this workspace; paused writers resume.`);
   return { trusted: true, changes: plan.changes };
 }
