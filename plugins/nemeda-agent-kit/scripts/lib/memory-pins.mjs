@@ -193,12 +193,23 @@ export function describeFolderIdentity(identity) {
 // is recorded as pending for `memory trust` and pauses unattended writers,
 // while interactive commands get a warning. `recordFirstUse: false` (doctor)
 // writes nothing.
+// How a pin kind reads in messages, and which unattended writers it pauses.
+// Kinds name a role ("memory", "meetings:transcripts"), never a configured
+// path: a path in the kind would turn a changed path into a new kind that
+// pins silently as a first use, skipping the pause.
+function folderKindWording(kind) {
+  if (kind === "memory") return { label: "memory", paused: "harvest, meeting entries, the automatic sync" };
+  if (kind.startsWith("meetings:")) return { label: `meetings ${kind.slice("meetings:".length)}`, paused: "the meeting watch loop" };
+  return { label: kind, paused: "unattended writers" };
+}
+
 export function checkFolderPin(root, kind, destination, { unattended = false, recordFirstUse = true, now = new Date() } = {}) {
+  const wording = folderKindWording(kind);
   if (destination.insideDrive === false) {
     return {
       allowed: false,
       reason: "outside-drive",
-      message: `The ${kind} folder resolves to ${destination.realpath}, outside the shared drive ${destination.sharedDrive}; nothing is written there. Check drive.links and the local link.`
+      message: `The ${wording.label} folder resolves to ${destination.realpath}, outside the shared drive ${destination.sharedDrive}; nothing is written there. Check drive.links and the local link.`
     };
   }
   if (!destination.identity) return { allowed: true };
@@ -216,7 +227,7 @@ export function checkFolderPin(root, kind, destination, { unattended = false, re
     const pending = pins.pendingFolders && typeof pins.pendingFolders === "object" ? pins.pendingFolders : {};
     writeStore(workspacePinsPath(root), { ...pins, version: STORE_VERSION, pendingFolders: { ...pending, [kind]: { identity: destination.identity, seenAt: now.toISOString() } } });
   }
-  const message = `The ${kind} folder moved from ${describeFolderIdentity(pinned.identity)} to ${describeFolderIdentity(destination.identity)}, which may be shared with a different audience. Unattended writes (harvest, meeting entries, the automatic sync) are paused until a person confirms it at a terminal: nemeda-agent memory trust`;
+  const message = `The ${wording.label} folder moved from ${describeFolderIdentity(pinned.identity)} to ${describeFolderIdentity(destination.identity)}, which may be shared with a different audience. Unattended writes (${wording.paused}) are paused until a person confirms it at a terminal: nemeda-agent memory trust`;
   return unattended ? { allowed: false, reason: "folder-moved", message } : { allowed: true, warning: message };
 }
 

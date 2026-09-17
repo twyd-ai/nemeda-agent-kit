@@ -13,6 +13,7 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { recordEntry } from "../scripts/lib/memory.mjs";
 import {
+  checkFolderPin,
   checkMemoryWrite,
   describeCentralTrust,
   folderIdentity,
@@ -92,6 +93,17 @@ test("a move within the drive pauses unattended writers, warns interactive ones,
   trustPendingFolders(root);
   assert.deepEqual(checkMemoryWrite(root, config, { unattended: true, environment }), { allowed: true });
   assert.deepEqual(pendingFolderChanges(root), []);
+});
+
+test("pause messages name the folder's role and the writers that kind pauses", () => {
+  const { root, drive, config, environment } = driveWorkspace();
+  const identity = () => folderIdentity(root, ".nemeda/memory", config.drive, environment);
+  checkFolderPin(root, "meetings:transcripts", identity(), { unattended: true });
+  relink(root, path.join(drive, "shared-with-everyone"));
+  const meetings = checkFolderPin(root, "meetings:transcripts", identity(), { unattended: true });
+  assert.match(meetings.message, /^The meetings transcripts folder moved/);
+  assert.match(meetings.message, /Unattended writes \(the meeting watch loop\) are paused/);
+  assert.doesNotMatch(meetings.message, /harvest/);
 });
 
 test("a memory folder outside its shared drive is refused for every writer", () => {
