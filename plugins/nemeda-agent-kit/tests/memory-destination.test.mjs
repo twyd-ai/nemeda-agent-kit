@@ -66,6 +66,15 @@ test("a memory folder is identified relative to its shared drive, whatever the m
   assert.equal(folderIdentity(root, ".nemeda/memory", config.drive, { ...environment, NEMEDA_DRIVE_ROOT: alias }).identity, "drive:google:Acme:memory");
 });
 
+test("the drive is located with the workspace .env.local too, like the configuration loader", () => {
+  const { root, drive, config, environment } = driveWorkspace();
+  const { NEMEDA_DRIVE_ROOT: _drive, ...withoutDrive } = environment;
+  writeFileSync(path.join(root, ".env.local"), `NEMEDA_DRIVE_ROOT=${drive}\n`);
+  assert.deepEqual(checkMemoryWrite(root, config, { unattended: true, environment: withoutDrive }), { allowed: true });
+  assert.equal(JSON.parse(readFileSync(workspacePinsPath(root), "utf8")).folders.memory.identity, "drive:google:Acme:memory");
+  assert.equal(withoutDrive.NEMEDA_DRIVE_ROOT, undefined, "the caller's environment is never mutated");
+});
+
 test("a move within the drive pauses unattended writers, warns interactive ones, and one trust resumes both", () => {
   const { root, drive, config, environment } = driveWorkspace();
   assert.deepEqual(checkMemoryWrite(root, config, { unattended: true, environment }), { allowed: true }, "first use pins silently");
