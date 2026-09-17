@@ -19,8 +19,8 @@
 import { existsSync, mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { workspaceDriveEnvironment } from "./config-source.mjs";
 import { findSharedDrive } from "./drive.mjs";
-import { loadEnvLocal } from "./env.mjs";
 
 const STORE_VERSION = 1;
 
@@ -235,12 +235,10 @@ export function checkMemoryWrite(root, config, { unattended = false, environment
     };
   }
   if (!config?.memory?.project?.path) return { allowed: true };
-  // Locate the drive with the same environment the configuration loader uses:
-  // the given one plus the workspace .env.local (a per-project
-  // NEMEDA_DRIVE_ROOT), on a copy, so the identity is computed against the
-  // same shared drive the configuration came from.
-  const driveEnvironment = { ...environment };
-  loadEnvLocal(root, driveEnvironment);
+  // Locate the drive with the configuration loader's own environment (the
+  // given one plus the workspace .env.local, on a copy), so the identity is
+  // computed against the same shared drive the configuration came from.
+  const driveEnvironment = workspaceDriveEnvironment(root, environment);
   return checkFolderPin(root, "memory", folderIdentity(root, config.memory.project.path, config.drive, driveEnvironment), { unattended, recordFirstUse });
 }
 
