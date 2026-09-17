@@ -30,9 +30,20 @@ function stamp() {
 // One tick = one `meeting process` run for this machine's role. Errors are
 // logged and the loop keeps going: a transient Drive hiccup must not stop
 // the service. Returns the report so tests and `--once` can inspect it.
-export function watchTick(start, options = {}, log = console.log) {
+// The loop is unattended, so a moved destination folder pauses it (guard 5
+// of docs/drive-config-plan.md). A pause is logged when it starts or its
+// message changes, not every tick; `memory` holds that across ticks.
+export function watchTick(start, options = {}, log = console.log, memory = {}) {
   try {
-    const report = processRecordings(start, { environment: options.environment, engine: options.engine, skipNotes: options.skipNotes });
+    const report = processRecordings(start, { environment: options.environment, engine: options.engine, skipNotes: options.skipNotes, unattended: true });
+    if (report.paused) {
+      const message = report.actions.filter((entry) => entry.kind === "destination" && entry.status !== "warning").map((entry) => entry.message).join(" ");
+      if (memory.paused !== message) log(`${stamp()} [paused] destination: ${message}`);
+      memory.paused = message;
+      return report;
+    }
+    if (memory.paused) log(`${stamp()} [resumed] destination: the meetings folders are trusted again.`);
+    memory.paused = null;
     const interesting = report.actions.filter((entry) => !["discover", "inbox"].includes(entry.kind) || entry.status !== "ok");
     for (const entry of interesting) log(`${stamp()} [${entry.status}] ${entry.kind}: ${entry.message}`);
     if (report.processed.length || report.handedOff.length) {
@@ -61,9 +72,10 @@ export async function runMeetingWatch(start, { intervalSeconds = DEFAULT_INTERVA
   process.once("SIGTERM", stop);
   log(`${stamp()} watching ${context.root} every ${interval}s (Ctrl-C to stop)`);
   let ticks = 0;
+  const memory = {};
   try {
     while (running) {
-      watchTick(context.root, { environment, engine, skipNotes }, log);
+      watchTick(context.root, { environment, engine, skipNotes }, log, memory);
       ticks += 1;
       if (once) break;
       await sleep(interval * 1000);

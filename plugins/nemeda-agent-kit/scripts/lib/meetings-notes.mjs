@@ -9,6 +9,7 @@ import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, unlinkSy
 import path from "node:path";
 import { detectBackend, runBackend } from "./backend.mjs";
 import { recordEntry } from "./memory.mjs";
+import { checkMemoryWrite } from "./memory-pins.mjs";
 import { slugify } from "./meetings-core.mjs";
 
 function action(kind, status, message, extra = {}) {
@@ -137,6 +138,16 @@ export function recordMeetingMemory(resolved, transcriptFolder, meta, notes, { a
   if (dryRun) {
     actions.push(action("memory", "planned", `record "${title}" in the project memory`));
     return null;
+  }
+  // Meeting entries are unattended writes. Ask first so a paused or refused
+  // write is reported with its real reason (guards 4 and 5 of
+  // docs/drive-config-plan.md) instead of "memory not configured".
+  if (resolved.projectConfig?.memory) {
+    const guard = checkMemoryWrite(resolved.root, resolved.projectConfig, { unattended: true, environment: resolved.environment, recordFirstUse: false });
+    if (!guard.allowed) {
+      actions.push(action("memory", "paused", guard.message));
+      return null;
+    }
   }
   const summary = (notes?.markdown && summaryFromNotes(notes.markdown))
     || `Transcript filed at ${transcriptRelative}/. ${readFileSync(path.join(transcriptFolder, "transcript.txt"), "utf8").trim().slice(0, 500)}`;

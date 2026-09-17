@@ -7,6 +7,7 @@ import { existsSync, statSync } from "node:fs";
 import path from "node:path";
 import { detectBackend } from "./backend.mjs";
 import { meetingServiceStatus } from "./meetings-watch.mjs";
+import { meetingDestinationChecks } from "./meetings-destinations.mjs";
 import { ENV_LOCAL_NAME, loadEnvLocal } from "./env.mjs";
 import {
   HEARTBEAT_STALE_HOURS,
@@ -226,6 +227,8 @@ export function meetingDoctorChecks(root, meetingsConfig, driveConfig, environme
       ? { status: "warn", code: "meetings-backlog", message: `${discovered.ready.length} recording(s) ready (${sizeMB} MB)${discovered.pending.length ? `, ${discovered.pending.length} still being written` : ""}; run \`nemeda-agent meeting process\`.${estimate}` }
       : { status: "pass", code: "meetings-backlog", message: `No recordings waiting${discovered.pending.length ? ` (${discovered.pending.length} still being written)` : ""}.` });
   }
+  // Moved or out-of-drive destination folders (guard 5, docs/drive-config-plan.md).
+  checks.push(...meetingDestinationChecks(root, meetingsConfig, driveConfig, environment));
   return checks;
 }
 

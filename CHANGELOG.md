@@ -11,6 +11,14 @@
   every memory path attributes entries to, instead of `git config
   user.email`, for people whose git email is a GitHub noreply address. The
   new `memory-author` doctor row warns about a noreply identity.
+- Workspace configuration on the shared drive: a local
+  `.nemeda/agent-kit.link.json` names the drive, and the kit reads
+  `config/agent-kit.json` (and `AGENTS.md`) from it, so a project whose code
+  repositories cannot be touched needs no repository just for its
+  configuration. A last good copy keeps the workspace working when the drive
+  is not mounted or a bad edit lands; `doctor` reports `config-source` and
+  the cache, mismatch, and conflict-copy cases
+  ([drive-config-plan.md](docs/drive-config-plan.md)).
 
 ### Changed
 
@@ -19,6 +27,8 @@
 - `nemeda-agent memory` commands report that the workspace configuration
   could not be read, with the reason, instead of claiming the `memory`
   section is missing.
+- `nemeda-agent meeting` commands and the `workspace_meetings` tool report
+  an unreadable configuration the same way.
 
 ### Security
 
@@ -35,6 +45,15 @@
   the drive pauses the unattended writers (harvest, meeting entries, the
   automatic sync) until `memory trust`; interactive commands warn and
   `doctor` reports `memory-destination`.
+- The same applies to the meetings folders (transcripts, notes, inbox,
+  archive): a move pauses the `meeting watch` loop until `memory trust`,
+  `meeting process` warns, a folder outside the shared drive is refused, and
+  `doctor` reports `meetings-destination`. A meeting memory entry that is
+  paused now says why.
+- Instructions read from the shared drive are marked in the session context,
+  and a change since the last session raises `config-instructions`. A drive
+  copy that names another shared drive, or resolves outside its drive, is
+  refused.
 
 ## 0.4.0 — 2026-09-15
 

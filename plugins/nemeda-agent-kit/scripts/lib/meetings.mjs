@@ -38,6 +38,7 @@ import {
   writeState
 } from "./meetings-core.mjs";
 import { archiveRecording, generateNotes, recordMeetingMemory, sweepDeletions } from "./meetings-notes.mjs";
+import { checkMeetingDestinations } from "./meetings-destinations.mjs";
 import { readWorkspaceContext, unreadableConfigurationMessage, validateConfig } from "./workspace.mjs";
 
 export * from "./meetings-core.mjs";
@@ -78,6 +79,8 @@ export function resolveMeetings(start, options = {}) {
   return {
     root: context.root,
     projectName: context.config.project.name,
+    projectConfig: context.config,
+    drive: context.config.drive || null,
     config: meetings,
     role,
     inbox,
@@ -96,6 +99,22 @@ export function resolveMeetings(start, options = {}) {
     host: os.hostname(),
     environment
   };
+}
+
+// Guard 5 (docs/drive-config-plan.md): before any write, the transcripts,
+// notes, inbox, and archive folders must still be the ones this workspace was
+// trusted with. A move within the shared drive stops the unattended watch
+// loop and only warns an interactive command; a folder outside the drive is
+// refused for both. Returns whether writing may go on.
+function guardDestinations(resolved, actions, { unattended, dryRun }) {
+  const result = checkMeetingDestinations(resolved.root, resolved.config, resolved.drive, {
+    unattended,
+    environment: resolved.environment,
+    recordFirstUse: !dryRun
+  });
+  for (const warning of result.warnings) actions.push(action("destination", "warning", warning.message));
+  for (const entry of result.refused) actions.push(action("destination", entry.reason === "outside-drive" ? "error" : "paused", entry.message));
+  return result.allowed;
 }
 
 function transcribesInbox(resolved) {
@@ -342,6 +361,9 @@ export function processRecordings(start, options = {}) {
   const resolved = resolveMeetings(start, options);
   const dryRun = Boolean(options.dryRun);
   const actions = [];
+  if (!guardDestinations(resolved, actions, { unattended: Boolean(options.unattended), dryRun })) {
+    return { root: resolved.root, role: resolved.role, dryRun, actions, processed: [], handedOff: [], paused: true };
+  }
   const state = readState(resolved.root);
   const processed = [];
   const handedOff = [];
@@ -425,11 +447,15 @@ export function processRecordings(start, options = {}) {
 // transcript, for retries and for transcripts made before notes existed.
 export function notesForTranscript(start, folder, options = {}) {
   const resolved = resolveMeetings(start, options);
+  const guardActions = [];
+  if (!guardDestinations(resolved, guardActions, { unattended: false, dryRun: Boolean(options.dryRun) })) {
+    return { root: resolved.root, dryRun: Boolean(options.dryRun), actions: guardActions, notes: null, memory: null, paused: true };
+  }
   const transcriptFolder = path.resolve(resolved.root, expandHome(folder, resolved.environment));
   const metaPath = path.join(transcriptFolder, "meta.json");
   if (!existsSync(metaPath)) throw new Error(`Not a transcript folder (no meta.json): ${transcriptFolder}`);
   const meta = JSON.parse(readFileSync(metaPath, "utf8"));
-  const actions = [];
+  const actions = [...guardActions];
   if (!resolved.notesDirectory) {
     actions.push(action("notes", "skipped", "meetings.notes is not configured; add it to .nemeda/agent-kit.json to write notes."));
   }
