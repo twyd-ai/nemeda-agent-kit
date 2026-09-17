@@ -188,11 +188,6 @@ export function describeFolderIdentity(identity) {
   return identity.slice(identity.indexOf(":") + 1);
 }
 
-// `kind` is "memory" here; the meetings watch loop uses "meetings:<folder>"
-// with the same store. The first sighting pins silently; a different identity
-// is recorded as pending for `memory trust` and pauses unattended writers,
-// while interactive commands get a warning. `recordFirstUse: false` (doctor)
-// writes nothing.
 // How a pin kind reads in messages, and which unattended writers it pauses.
 // Kinds name a role ("memory", "meetings:transcripts"), never a configured
 // path: a path in the kind would turn a changed path into a new kind that
@@ -203,6 +198,12 @@ function folderKindWording(kind) {
   return { label: kind, paused: "unattended writers" };
 }
 
+// `kind` is a role: "memory" for the memory writers, "meetings:transcripts",
+// "meetings:notes", "meetings:inbox", or "meetings:archive" for the meetings
+// watch loop, all in the same store. The first sighting pins silently; a
+// different identity is recorded as pending for `memory trust` and pauses
+// unattended writers, while interactive commands get a warning.
+// `recordFirstUse: false` (doctor) writes nothing.
 export function checkFolderPin(root, kind, destination, { unattended = false, recordFirstUse = true, now = new Date() } = {}) {
   const wording = folderKindWording(kind);
   if (destination.insideDrive === false) {
