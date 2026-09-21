@@ -1,6 +1,11 @@
 # Changelog
 
-## Unreleased
+## 0.5.0 — 2026-09-21
+
+The release that lets a project keep its configuration on its shared drive
+instead of in a repository of its own, brings an Airtable Knowledge Log into
+project memory, and guards where a person's token and a project's memory
+can go.
 
 ### Added
 
@@ -25,8 +30,8 @@
   --from-drive "<shared drive>"` sets up a teammate's folder from it. At a
   terminal both offer the `memory trust` confirmation when the workspace has
   not pinned the central memory service yet; without one they never trust
-  it. Inside a Git
-  repository both keep `.nemeda/` out of it through `.git/info/exclude`.
+  it. Inside a Git repository both keep `.nemeda/` out of it through
+  `.git/info/exclude`.
 
 ### Changed
 
