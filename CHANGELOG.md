@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- `nemeda-agent memory recap`, `close`, and `harvest` now say why the host
+  CLI failed. Claude Code reports errors such as "Not logged in · Please run
+  /login" on stdout with an empty stderr, which left only "exited with
+  status 1".
+
 ## 0.5.0 — 2026-09-21
 
 The release that lets a project keep its configuration on its shared drive

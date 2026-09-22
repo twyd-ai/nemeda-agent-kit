@@ -5,6 +5,7 @@
 // and the cost lands on the person who asked for it.
 import { spawnSync } from "node:child_process";
 import path from "node:path";
+import { hostExitError } from "./harvest.mjs";
 import { latestRevisions, readAllJournals, resolveAuthorEmail } from "./memory.mjs";
 import { centralSettings } from "./memory-central.mjs";
 import { createDigest, validateDigest, writeDigest } from "./memory-digest.mjs";
@@ -111,7 +112,7 @@ export function generateDigestBody(prompt, { host = "claude", environment = proc
   });
   if (result.error) return { error: `${spec.label} could not be started (${result.error.message}); is it on PATH?` };
   if (result.signal === "SIGTERM" && result.status === null) return { error: `${spec.label} timed out after ${timeoutMs}ms.` };
-  if (result.status !== 0) return { error: `${spec.label} exited with status ${result.status}: ${String(result.stderr || "").slice(0, 500).trim()}` };
+  if (result.status !== 0) return { error: hostExitError(spec.label, host, result) };
   const { text, error } = parseBackendOutput(host, result.stdout);
   if (error) return { error: `${spec.label}: ${error}` };
   return { text: text.replace(/^```(?:markdown|md)?\s*/i, "").replace(/```\s*$/, "").trim() };

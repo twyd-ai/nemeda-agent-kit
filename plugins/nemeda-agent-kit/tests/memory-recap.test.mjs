@@ -103,6 +103,21 @@ test("memory recap has the host CLI write the digest from reviewed entries only,
   assert.match(digest.body, /^## Decided/);
 });
 
+test("a failing host CLI's reason reaches the person even when it only reports it on stdout", () => {
+  const { root, config } = workspace();
+  seed(root);
+  // Claude Code signed out: exit 1, empty stderr, the reason in the JSON result.
+  const dir = mkdtempSync(path.join(tmpdir(), "nemeda-stub-claude-"));
+  const file = path.join(dir, "claude");
+  const envelope = JSON.stringify({ type: "result", subtype: "success", is_error: true, result: "Not logged in · Please run /login" });
+  writeFileSync(file, `#!/bin/sh\ncat > /dev/null\necho '${envelope}'\nexit 1\n`);
+  chmodSync(file, 0o755);
+  assert.throws(
+    () => recapProject(root, config, { period: THIS_MONTH, host: "claude", dryRun: true, environment: { ...process.env, NEMEDA_CLAUDE_BIN: file } }),
+    /Claude Code exited with status 1: Not logged in · Please run \/login/
+  );
+});
+
 test("memory recap takes the digest from stdin through the CLI, and refuses an empty period", () => {
   const { root } = workspace();
   seed(root);

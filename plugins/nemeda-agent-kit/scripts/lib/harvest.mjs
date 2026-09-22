@@ -135,6 +135,16 @@ Segment the session by AI model if more than one model answered during it; one s
 For each segment, produce one entry with: type (one of "ai-interaction", "decision", "finding", "meeting" — pick the one that best fits what the segment produced, "ai-interaction" for a typical coding session), title (one short line), summary (3-6 lines, internal audience, include context a teammate would need), and optionally clientSummary (sanitised, no internal references) and tags (a short array of free-text tags).
 Reply with ONLY a JSON array of these objects. No prose before or after, no markdown code fences.`;
 
+// The message for a host CLI that exited non-zero. `claude -p --output-format
+// json` reports its own failures ("Not logged in · Please run /login") as the
+// JSON result on stdout and leaves stderr empty, so stderr alone would leave
+// the person with a bare exit status and no reason.
+export function hostExitError(label, hostName, result) {
+  const stderr = String(result.stderr || "").trim();
+  const detail = stderr || parseBackendOutput(hostName, result.stdout).error || String(result.stdout || "").trim();
+  return `${label} exited with status ${result.status}${detail ? `: ${detail.slice(0, 500)}` : ""}`;
+}
+
 // Resumes one session through its host CLI and returns its raw answer text.
 // NEMEDA_MEMORY_HARVESTER=1 on the child's environment is load-bearing, not
 // decorative: it is what stops the resumed session's own SessionStart/Stop
@@ -150,7 +160,7 @@ function resumeSession(hostName, sessionId, environment, timeoutMs) {
   });
   if (result.error) return { error: `${host.label} could not be started (${result.error.message}); is it on PATH?` };
   if (result.signal === "SIGTERM" && result.status === null) return { error: `${host.label} timed out after ${timeoutMs}ms.` };
-  if (result.status !== 0) return { error: `${host.label} exited with status ${result.status}: ${String(result.stderr || "").slice(0, 500).trim()}` };
+  if (result.status !== 0) return { error: hostExitError(host.label, hostName, result) };
   const { text, error } = parseBackendOutput(hostName, result.stdout);
   if (error) return { error: `${host.label}: ${error}` };
   return { text };
