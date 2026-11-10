@@ -366,7 +366,7 @@ async function runMeeting(options) {
     if (listing.inbox && listing.inboxExists) {
       console.log(`\nShared inbox: ${listing.inboxReady.length} waiting, ${listing.inboxPending.length} still syncing, ${listing.claims.length} claimed, ${listing.inboxProcessed.length} transcribed`);
       for (const entry of listing.inboxReady) console.log(`  waiting  ${describe(entry)}`);
-      for (const claim of listing.claims) console.log(`  claimed  ${path.basename(claim.original)} by ${claim.host}`);
+      for (const claim of listing.claims) console.log(`  claimed  ${path.basename(claim.original)} by ${claim.label}`);
     }
     const pendingWork = listing.ready.length + (listing.role === "recorder" ? 0 : listing.inboxReady.length);
     if (pendingWork) console.log(`\nRun \`nemeda-agent meeting process\` to ${listing.role === "recorder" ? "hand the ready recordings to the inbox" : "transcribe the waiting recordings"}.`);

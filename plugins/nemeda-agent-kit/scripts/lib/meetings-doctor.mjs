@@ -11,11 +11,13 @@ import { meetingDestinationChecks } from "./meetings-destinations.mjs";
 import { ENV_LOCAL_NAME, loadEnvLocal } from "./env.mjs";
 import {
   HEARTBEAT_STALE_HOURS,
+  LEGACY_HEARTBEAT_FILE,
   MODEL_TIERS,
   activeTranscribers,
   discoverRecordings,
   findWhisperModel,
   installCommands,
+  legacyHeartbeatStatus,
   listClaims,
   minutesPerHour,
   probeHost,
@@ -86,16 +88,25 @@ export function meetingDoctorChecks(root, meetingsConfig, driveConfig, environme
       const shared = discoverRecordings(inbox, readSharedState(inbox));
       if (role === "recorder") {
         checks.push(active.length
-          ? { status: "pass", code: "meetings-transcriber", message: `${active.length} transcriber(s) seen in the last ${HEARTBEAT_STALE_HOURS} h: ${active.map((beat) => `${beat.host} (${beat.engine || "?"})`).join(", ")}.` }
+          ? { status: "pass", code: "meetings-transcriber", message: `${active.length} transcriber(s) seen in the last ${HEARTBEAT_STALE_HOURS} h: ${active.map((beat) => `${beat.label} (${beat.engine || "?"})`).join(", ")}.` }
           : { status: "warn", code: "meetings-transcriber", message: `No transcriber has reported in the last ${HEARTBEAT_STALE_HOURS} h; recordings will pile up in the inbox until one runs \`nemeda-agent meeting process\`.` });
       }
       const inboxBacklog = [];
       if (shared.ready.length) inboxBacklog.push(`${shared.ready.length} waiting`);
       if (shared.pending.length) inboxBacklog.push(`${shared.pending.length} still syncing`);
-      if (claims.length) inboxBacklog.push(`${claims.length} claimed (${claims.map((claim) => claim.host).join(", ")})`);
+      if (claims.length) inboxBacklog.push(`${claims.length} claimed (${claims.map((claim) => claim.label).join(", ")})`);
       checks.push(shared.ready.length && role !== "recorder"
         ? { status: "warn", code: "meetings-inbox-backlog", message: `Inbox: ${inboxBacklog.join(", ")}; run \`nemeda-agent meeting process\`.` }
         : { status: "pass", code: "meetings-inbox-backlog", message: `Inbox: ${inboxBacklog.length ? inboxBacklog.join(", ") : "empty"}.` });
+      // Machines on an older kit version edit one shared heartbeat file,
+      // which Drive answers with edit-conflict retries.
+      const legacy = legacyHeartbeatStatus(inbox);
+      if (legacy) {
+        const file = `${meetingsConfig.inbox}/${LEGACY_HEARTBEAT_FILE}`;
+        checks.push(legacy.recent.length
+          ? { status: "warn", code: "meetings-legacy-heartbeat", message: `${legacy.recent.join(", ")} still write ${file} (older kit version); update the kit there to stop Drive edit conflicts.` }
+          : { status: "warn", code: "meetings-legacy-heartbeat", message: `${file} is left over from an older kit version and no machine has written it in ${HEARTBEAT_STALE_HOURS} h; delete it from the shared drive.` });
+      }
     }
   }
   if (role === "recorder") {

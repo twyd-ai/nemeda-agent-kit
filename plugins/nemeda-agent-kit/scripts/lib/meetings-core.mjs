@@ -5,6 +5,8 @@
 // imports this module, and this module imports nothing of theirs, so the
 // dependency graph stays a tree.
 
+import { execFileSync } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { accessSync, constants, copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -512,11 +514,21 @@ export function discoverRecordings(watch, state, { now = Date.now(), stableSecon
 
 export const ROLES = ["recorder", "transcriber", "full"];
 export const DEFAULT_ROLE = "full";
-export const SHARED_STATE_FILE = ".processed.json";
-export const HEARTBEAT_FILE = ".transcribers.json";
+// Every machine writes only its own file in these folders, named by its
+// machine id, so two machines never edit the same file on the shared drive
+// (Drive answers concurrent edits of one file with conflict retries).
+export const SHARED_STATE_DIRECTORY = ".processed";
+export const HEARTBEAT_DIRECTORY = ".transcribers";
+// Single files of earlier versions, edited by every machine: still read so
+// nothing done before the upgrade is lost, never written.
+export const LEGACY_SHARED_STATE_FILE = ".processed.json";
+export const LEGACY_HEARTBEAT_FILE = ".transcribers.json";
 export const CLAIM_MARKER = ".claimed-";
 // A transcriber that has not reported in this long is treated as gone.
 export const HEARTBEAT_STALE_HOURS = 48;
+// A heartbeat younger than this is not rewritten on every watcher pass.
+export const HEARTBEAT_REFRESH_HOURS = 1;
+export const MACHINE_FILE = "machine.json";
 
 export function resolveRole(environment = process.env) {
   const value = String(environment.NEMEDA_MEETINGS_ROLE || DEFAULT_ROLE).trim().toLowerCase();
@@ -533,23 +545,112 @@ function readJsonSafe(filePath, fallback) {
   }
 }
 
-export function sharedStatePath(inbox) {
-  return path.join(inbox, SHARED_STATE_FILE);
+function writeJson(filePath, value) {
+  mkdirSync(path.dirname(filePath), { recursive: true });
+  writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`);
+}
+
+// One file per machine in `directory`, in a stable order.
+function machineFiles(directory) {
+  if (!existsSync(directory)) return [];
+  return readdirSync(directory, { withFileTypes: true })
+    .filter((entry) => entry.isFile() && entry.name.endsWith(".json") && !entry.name.startsWith("."))
+    .map((entry) => path.join(directory, entry.name))
+    .sort();
+}
+
+// ---------------------------------------------------------------------------
+// Machine identity: a random id made once and kept in the personal state
+// (~/.nemeda/state/machine.json), plus a human label. Shared files and claims
+// are keyed by the id, never by the hostname: DHCP and IPv6 autoconfiguration
+// change it from one network to the next, and it carries network details
+// nobody needs to see on the shared drive. NEMEDA_MACHINE_LABEL renames it.
+// ---------------------------------------------------------------------------
+
+// Names a network handed out: IPv4 or IPv6 addresses written with dashes
+// (`192-168-1-20`, `2a02-9130-...`) and the usual DHCP prefixes.
+const NETWORK_DERIVED_NAME = /(?:\d{1,3}-){3}\d{1,3}|(?:[0-9a-f]{1,4}-){3,}[0-9a-f]{1,4}|^(?:ip|dhcp|dyn|eduroam|wlan|wifi|client)[-_]?\d/i;
+
+export function machineIdentityPath(environment = process.env) {
+  const home = environment.NEMEDA_HOME || path.join(environment.HOME || os.homedir(), ".nemeda");
+  return path.join(home, "state", MACHINE_FILE);
+}
+
+function stableMachineName() {
+  if (process.platform === "darwin") {
+    try {
+      // The name set in System Settings, which no network changes.
+      const name = execFileSync("scutil", ["--get", "ComputerName"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 2000 }).trim();
+      if (name) return name;
+    } catch {
+      // Fall back to the hostname below.
+    }
+  }
+  const short = os.hostname().split(".")[0];
+  return short && !NETWORK_DERIVED_NAME.test(short) ? short : null;
+}
+
+export function isNetworkDerivedName(name) {
+  return NETWORK_DERIVED_NAME.test(String(name || ""));
+}
+
+export function machineIdentity(environment = process.env) {
+  const filePath = machineIdentityPath(environment);
+  let stored = readJsonSafe(filePath, null);
+  if (!stored || !/^[0-9a-f]{8,}$/.test(String(stored.id || ""))) {
+    const id = randomBytes(8).toString("hex");
+    stored = { id, label: stableMachineName() || `${process.platform}-${id.slice(0, 6)}`, createdAt: new Date().toISOString() };
+    writeJson(filePath, stored);
+  }
+  const label = String(environment.NEMEDA_MACHINE_LABEL || "").trim() || stored.label || stored.id;
+  return { id: stored.id, label };
+}
+
+// ---------------------------------------------------------------------------
+// Shared processed state: what is done in the inbox, by name relative to it.
+// Records from every machine are merged by recordKey; fields one machine adds
+// later (archivedTo, deletedAt) complete the record another machine wrote.
+// ---------------------------------------------------------------------------
+
+export function sharedStatePath(inbox, machineId) {
+  return path.join(inbox, SHARED_STATE_DIRECTORY, `${safeHost(machineId)}.json`);
+}
+
+function readProcessedList(filePath) {
+  const parsed = readJsonSafe(filePath, null);
+  return Array.isArray(parsed?.processed) ? parsed.processed : [];
 }
 
 export function readSharedState(inbox) {
-  const parsed = readJsonSafe(sharedStatePath(inbox), null);
-  return { processed: Array.isArray(parsed?.processed) ? parsed.processed : [] };
+  const merged = new Map();
+  const sources = [path.join(inbox, LEGACY_SHARED_STATE_FILE), ...machineFiles(path.join(inbox, SHARED_STATE_DIRECTORY))];
+  for (const filePath of sources) {
+    for (const entry of readProcessedList(filePath)) {
+      const key = recordKey(entry);
+      merged.set(key, { ...merged.get(key), ...entry });
+    }
+  }
+  return { processed: [...merged.values()] };
 }
 
-export function writeSharedState(inbox, state) {
-  writeFileSync(sharedStatePath(inbox), `${JSON.stringify(state, null, 2)}\n`);
+// Adds or completes records in this machine's own file, and only there.
+export function recordSharedEntries(inbox, machineId, entries) {
+  const filePath = sharedStatePath(inbox, machineId);
+  const own = readProcessedList(filePath);
+  for (const entry of entries) {
+    const index = own.findIndex((item) => recordKey(item) === recordKey(entry));
+    if (index === -1) own.push(entry);
+    else own[index] = { ...own[index], ...entry };
+  }
+  writeJson(filePath, { processed: own });
+  return own;
 }
 
-// Claims: `x.mkv` becomes `x.mkv.claimed-<host>` while one transcriber works
-// on it. The rename is atomic on every filesystem the kit targets, the file
-// stops matching RECORDING_EXTENSIONS so other transcribers skip it, and the
-// original name (with its mtime and size) comes back when the work is done.
+// Claims: `x.mkv` becomes `x.mkv.claimed-<machine id>` while one transcriber
+// works on it. The rename is atomic on every filesystem the kit targets, the
+// file stops matching RECORDING_EXTENSIONS so other transcribers skip it, and
+// the original name (with its mtime and size) comes back when the work is
+// done. Earlier versions claimed by hostname; those claims are still read.
 function safeHost(host) {
   return String(host || "unknown").replace(/[^A-Za-z0-9._-]+/g, "-");
 }
@@ -570,45 +671,84 @@ export function releaseClaim(claimedPath) {
   return original;
 }
 
+// `host` is the claim suffix (a machine id, or a hostname for old claims);
+// `label` is the name to show, from that machine's heartbeat when known.
 export function listClaims(inbox) {
   if (!inbox || !existsSync(inbox)) return [];
+  const labels = new Map(readHeartbeats(inbox).filter((beat) => beat.id).map((beat) => [safeHost(beat.id), beat.label]));
   return readdirSync(inbox, { withFileTypes: true })
     .filter((entry) => entry.isFile() && entry.name.includes(CLAIM_MARKER))
     .map((entry) => {
       const claimed = path.join(inbox, entry.name);
       const marker = entry.name.lastIndexOf(CLAIM_MARKER);
-      return { path: claimed, original: path.join(inbox, entry.name.slice(0, marker)), host: entry.name.slice(marker + CLAIM_MARKER.length) };
+      const host = entry.name.slice(marker + CLAIM_MARKER.length);
+      return { path: claimed, original: path.join(inbox, entry.name.slice(0, marker)), host, label: labels.get(host) || host };
     });
 }
 
-// A claim by this very host can only be left over from a run that died;
-// releasing it makes the recording visible again.
-export function reclaimStale(inbox, host) {
-  const mine = listClaims(inbox).filter((claim) => claim.host === safeHost(host));
+// A claim by this very machine can only be left over from a run that died;
+// releasing it makes the recording visible again. `hosts` takes the machine
+// id and, for claims made before the upgrade, the hostname.
+export function reclaimStale(inbox, hosts) {
+  const own = new Set([hosts].flat().filter(Boolean).map(safeHost));
+  const mine = listClaims(inbox).filter((claim) => own.has(claim.host));
   for (const claim of mine) releaseClaim(claim.path);
   return mine.map((claim) => claim.original);
 }
 
-export function heartbeatPath(inbox) {
-  return path.join(inbox, HEARTBEAT_FILE);
+// ---------------------------------------------------------------------------
+// Heartbeats: `<inbox>/.transcribers/<machine id>.json`, rewritten at most
+// once per HEARTBEAT_REFRESH_HOURS unless what it says changes.
+// ---------------------------------------------------------------------------
+
+export function heartbeatPath(inbox, machineId) {
+  return path.join(inbox, HEARTBEAT_DIRECTORY, `${safeHost(machineId)}.json`);
 }
 
+export function writeHeartbeat(inbox, identity, details = {}, now = new Date()) {
+  const filePath = heartbeatPath(inbox, identity.id);
+  const beat = { id: identity.id, label: identity.label, ...details };
+  const previous = readJsonSafe(filePath, null);
+  const age = now.getTime() - Date.parse(previous?.lastSeen || 0);
+  const unchanged = previous && Object.entries(beat).every(([key, value]) => previous[key] === value);
+  if (unchanged && age >= 0 && age < HEARTBEAT_REFRESH_HOURS * 3_600_000) return { written: false, beat: previous };
+  const next = { ...beat, lastSeen: now.toISOString() };
+  writeJson(filePath, next);
+  return { written: true, beat: next };
+}
+
+// Every heartbeat, newest first: one per machine file, plus the hosts of the
+// legacy single file (`legacy: true`, labelled by their old hostname).
 export function readHeartbeats(inbox) {
-  const parsed = readJsonSafe(heartbeatPath(inbox), {});
-  return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  const beats = [];
+  for (const filePath of machineFiles(path.join(inbox, HEARTBEAT_DIRECTORY))) {
+    const beat = readJsonSafe(filePath, null);
+    if (!beat || typeof beat !== "object" || Array.isArray(beat)) continue;
+    const id = beat.id || path.basename(filePath, ".json");
+    beats.push({ ...beat, id, label: beat.label || id });
+  }
+  const legacy = readJsonSafe(path.join(inbox, LEGACY_HEARTBEAT_FILE), {});
+  if (legacy && typeof legacy === "object" && !Array.isArray(legacy)) {
+    for (const [host, beat] of Object.entries(legacy)) beats.push({ ...beat, id: null, label: host, legacy: true });
+  }
+  return beats.sort((a, b) => (Date.parse(b.lastSeen || 0) || 0) - (Date.parse(a.lastSeen || 0) || 0));
 }
 
-export function writeHeartbeat(inbox, host, details = {}, now = new Date()) {
-  const beats = readHeartbeats(inbox);
-  beats[safeHost(host)] = { ...details, lastSeen: now.toISOString() };
-  writeFileSync(heartbeatPath(inbox), `${JSON.stringify(beats, null, 2)}\n`);
-  return beats;
+function isFresh(beat, now, staleHours) {
+  return now - Date.parse(beat?.lastSeen || 0) < staleHours * 3_600_000;
 }
 
 export function activeTranscribers(inbox, now = Date.now(), staleHours = HEARTBEAT_STALE_HOURS) {
-  return Object.entries(readHeartbeats(inbox))
-    .filter(([, beat]) => now - Date.parse(beat?.lastSeen || 0) < staleHours * 3_600_000)
-    .map(([host, beat]) => ({ host, ...beat }));
+  return readHeartbeats(inbox).filter((beat) => isFresh(beat, now, staleHours));
+}
+
+// The legacy single heartbeat file: `recent` lists the hosts that still write
+// it (machines on an older kit version); once none does it can be deleted.
+export function legacyHeartbeatStatus(inbox, now = Date.now(), staleHours = HEARTBEAT_STALE_HOURS) {
+  const filePath = path.join(inbox, LEGACY_HEARTBEAT_FILE);
+  if (!existsSync(filePath)) return null;
+  const recent = readHeartbeats(inbox).filter((beat) => beat.legacy && isFresh(beat, now, staleHours));
+  return { path: filePath, recent: recent.map((beat) => beat.label) };
 }
 
 // Hand-off: copy into the inbox under a temporary name, then rename, so a

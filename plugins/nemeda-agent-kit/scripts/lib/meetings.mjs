@@ -22,11 +22,13 @@ import {
   findWhisperModel,
   handOffRecording,
   listClaims,
+  machineIdentity,
   probeHost,
   readSharedState,
   readState,
   reclaimStale,
   recordKey,
+  recordSharedEntries,
   recordingTimestamp,
   releaseClaim,
   resolveRole,
@@ -34,7 +36,6 @@ import {
   selectEngine,
   transcriptName,
   writeHeartbeat,
-  writeSharedState,
   writeState
 } from "./meetings-core.mjs";
 import { archiveRecording, generateNotes, recordMeetingMemory, sweepDeletions } from "./meetings-notes.mjs";
@@ -76,6 +77,7 @@ export function resolveMeetings(start, options = {}) {
   const selection = selectEngine(machine, environment, { explicit: options.engine || null });
   const engine = selection.engine;
   const threads = Number.parseInt(environment.NEMEDA_MEETINGS_THREADS || "", 10) || Math.max(1, os.cpus().length);
+  const identity = machineIdentity(environment);
   return {
     root: context.root,
     projectName: context.config.project.name,
@@ -96,7 +98,10 @@ export function resolveMeetings(start, options = {}) {
     transcriptsDirectory: path.join(context.root, meetings.transcripts),
     notesDirectory: meetings.notes ? path.join(context.root, meetings.notes) : null,
     ffmpeg: environment.NEMEDA_FFMPEG_BIN || "ffmpeg",
-    host: os.hostname(),
+    // `host` is the human label written into meta and state; shared files
+    // and claims are keyed by `identity.id`.
+    host: identity.label,
+    identity,
     environment
   };
 }
@@ -308,14 +313,15 @@ function drainInbox(resolved, actions, dryRun, title, skipNotes) {
     return processed;
   }
   if (!dryRun) {
-    for (const released of reclaimStale(resolved.inbox, resolved.host)) {
+    // Claims made before machine ids existed carry the hostname.
+    for (const released of reclaimStale(resolved.inbox, [resolved.identity.id, os.hostname()])) {
       actions.push(action("claim", "warn", `Released a stale claim of this machine on ${path.basename(released)}.`));
     }
-    writeHeartbeat(resolved.inbox, resolved.host, { engine: resolved.engine.name, role: resolved.role });
+    writeHeartbeat(resolved.inbox, resolved.identity, { engine: resolved.engine.name, role: resolved.role });
   }
   const shared = readSharedState(resolved.inbox);
   const discovered = discoverRecordings(resolved.inbox, shared);
-  const others = listClaims(resolved.inbox).filter((claim) => claim.host !== resolved.host);
+  const others = listClaims(resolved.inbox).filter((claim) => claim.host !== resolved.identity.id);
   actions.push(action("inbox", "ok", `${path.relative(resolved.root, resolved.inbox)}/: ${discovered.ready.length} ready, ${discovered.pending.length} still syncing, ${others.length} claimed by other machines, ${discovered.processed.length} already transcribed.`));
   if (title && discovered.ready.length > 1) {
     throw new Error(`--title applies to one recording, but ${discovered.ready.length} are ready in the inbox; pass the file explicitly.`);
@@ -327,7 +333,7 @@ function drainInbox(resolved, actions, dryRun, title, skipNotes) {
     }
     let claimed;
     try {
-      claimed = claimRecording(recording.path, resolved.host);
+      claimed = claimRecording(recording.path, resolved.identity.id);
     } catch (error) {
       actions.push(action("claim", "warn", `${path.basename(recording.path)} was taken by another machine (${error instanceof Error ? error.message : String(error)}).`));
       continue;
@@ -335,20 +341,14 @@ function drainInbox(resolved, actions, dryRun, title, skipNotes) {
     try {
       const result = transcribeRecording(resolved, { ...recording, inputPath: claimed }, { title, dryRun, actions });
       if (result && !result.planned) {
-        const latest = readSharedState(resolved.inbox);
-        latest.processed.push({ ...processedEntry(recording, resolved, result), path: path.basename(recording.path) });
-        writeSharedState(resolved.inbox, latest);
+        const entry = { ...processedEntry(recording, resolved, result), path: path.basename(recording.path) };
+        recordSharedEntries(resolved.inbox, resolved.identity.id, [entry]);
         processed.push(result);
         // Release the claim before touching the file again (archive moves it).
         releaseClaim(claimed);
         claimed = null;
         const { archived } = afterTranscript(resolved, result, recording.path, { actions, dryRun, skipNotes });
-        if (archived) {
-          const current = readSharedState(resolved.inbox);
-          const entry = current.processed.find((item) => item.path === path.basename(recording.path));
-          if (entry) entry.archivedTo = path.relative(resolved.root, archived);
-          writeSharedState(resolved.inbox, current);
-        }
+        if (archived) recordSharedEntries(resolved.inbox, resolved.identity.id, [{ ...entry, archivedTo: path.relative(resolved.root, archived) }]);
       }
     } finally {
       if (claimed) releaseClaim(claimed);
@@ -437,8 +437,13 @@ export function processRecordings(start, options = {}) {
   // Retention sweep: local recordings, then the inbox copies (names relative to the inbox).
   if (sweepDeletions(resolved, state, { actions, dryRun }) && !dryRun) writeState(resolved.root, state);
   if (transcribesInbox(resolved) && existsSync(resolved.inbox)) {
+    // Records swept here may come from another machine's file; the deletion
+    // is recorded in this machine's own file and merged on read.
     const shared = readSharedState(resolved.inbox);
-    if (sweepDeletions(resolved, shared, { actions, dryRun, resolvePath: (entry) => path.join(resolved.inbox, entry.path) }) && !dryRun) writeSharedState(resolved.inbox, shared);
+    const open = new Set(shared.processed.filter((entry) => !entry.deletedAt).map(recordKey));
+    sweepDeletions(resolved, shared, { actions, dryRun, resolvePath: (entry) => path.join(resolved.inbox, entry.path) });
+    const swept = shared.processed.filter((entry) => entry.deletedAt && open.has(recordKey(entry)));
+    if (swept.length && !dryRun) recordSharedEntries(resolved.inbox, resolved.identity.id, swept);
   }
   return { root: resolved.root, role: resolved.role, dryRun, actions, processed, handedOff };
 }

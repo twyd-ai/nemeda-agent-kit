@@ -4,6 +4,18 @@
 
 ### Fixed
 
+- Meeting transcribers no longer make Google Drive retry conflicting edits
+  in the shared inbox. Each machine now writes only its own files, named by
+  a random machine id kept in `~/.nemeda/state/machine.json`: the heartbeat
+  in `<inbox>/.transcribers/<id>.json` (rewritten at most once an hour) and
+  the processed records in `<inbox>/.processed/<id>.json`, merged on read.
+  Claims are `<name>.claimed-<id>`. Hostnames, which change with the network
+  and leaked it into the shared drive, are no longer used as keys;
+  `NEMEDA_MACHINE_LABEL` sets the name the team sees. The old
+  `.transcribers.json` and `.processed.json` are still read and never
+  written, and `meeting doctor` says when the old heartbeat file can be
+  deleted.
+
 - `nemeda-agent memory recap`, `close`, and `harvest` now say why the host
   CLI failed. Claude Code reports errors such as "Not logged in · Please run
   /login" on stdout with an empty stderr, which left only "exited with

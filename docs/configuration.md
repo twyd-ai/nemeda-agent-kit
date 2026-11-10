@@ -395,6 +395,7 @@ NEMEDA_MEETINGS_WATCH=/Users/me/Movies        # default: OBS's recording folder 
 NEMEDA_WHISPER_BIN=whisper-cli                 # default: whisper-cli on PATH
 NEMEDA_YAP_BIN=yap                             # default: yap on PATH
 NEMEDA_MEETINGS_THREADS=8                      # whisper only; default: all cores
+NEMEDA_MACHINE_LABEL=ana-mac                   # name shown to the team; default: computer name or hostname
 ```
 
 ### Team roles
@@ -409,15 +410,27 @@ machine picks a role in `.env.local`:
 | `full` (default) | transcribes its own recordings and, when an inbox exists, the team's | same as transcriber |
 
 One transcriber per team is enough, usually the most capable Mac. Several
-can run at once: a recording is claimed by renaming it to
-`<name>.claimed-<host>` (atomic, invisible to the other transcribers) and
-renamed back when done; what is done is recorded in `<inbox>/.processed.json`
-by name, so it is the same on every machine whatever its mount path; and each
-transcriber leaves a heartbeat in `<inbox>/.transcribers.json` that a
-recorder's `doctor` reads to warn when nobody has transcribed for 48 hours.
+can run at once, and no two machines ever write the same file in the inbox:
+each one has a random machine id, made once in
+`~/.nemeda/state/machine.json`, and writes only files named by it.
+
+- A recording is claimed by renaming it to `<name>.claimed-<machine id>`
+  (atomic, invisible to the other transcribers) and renamed back when done.
+- What is done is recorded in `<inbox>/.processed/<machine id>.json`, by
+  name, so it is the same on every machine whatever its mount path. Readers
+  merge every machine's file; archive and retention updates to a record
+  another machine wrote go into the updating machine's own file.
+- Each transcriber keeps a heartbeat in
+  `<inbox>/.transcribers/<machine id>.json` (label, engine, role, last
+  seen), rewritten at most once an hour. A recorder's `doctor` reads them to
+  warn when nobody has transcribed for 48 hours.
+
 A claim left by a machine that died is released the next time that machine
-runs; claims by other machines are listed by `meeting list` and never
-touched. Originals stay where the recorder put them.
+runs; claims by other machines are listed by `meeting list` with that
+machine's label and never touched. Originals stay where the recorder put
+them. The single `.processed.json` and `.transcribers.json` files of earlier
+versions are still read, never written; `doctor` says when nobody writes
+`.transcribers.json` any more so it can be deleted.
 
 ### Notes and memory
 
@@ -459,7 +472,8 @@ machine should only record). `base` exists for `setup --model base`.
   and the original recording is left where it was.
 - `nemeda-agent meeting notes <folder> [--force]`: notes and memory entry
   for an existing transcript folder.
-- `nemeda-agent meeting doctor`: role, inbox and transcriber heartbeat,
+- `nemeda-agent meeting doctor`: role, inbox and transcriber heartbeat
+  (and machines still writing the legacy `.transcribers.json`),
   notes backend, memory logging, retention policy, watch service,
   machine capability and estimate per hour of audio, engine selection and
   why, ffmpeg and model, recordings folder, transcripts/notes folders and

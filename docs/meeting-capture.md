@@ -120,11 +120,20 @@ NEMEDA_MEETINGS_ROLE=full          # default: both, on one machine
 
 A recorder copies each finished recording into the inbox once and needs no
 tools at all. A transcriber claims a recording (renaming it to
-`<name>.claimed-<host>`, invisible to other transcribers), transcribes it,
-files the transcript and notes, renames it back, and records it as done in
-`<inbox>/.processed.json`. Transcribers leave a heartbeat; a recorder's
-`meeting doctor` warns when nobody has transcribed for 48 hours. Two
-transcribers can share one inbox.
+`<name>.claimed-<machine id>`, invisible to other transcribers), transcribes
+it, files the transcript and notes, renames it back, and records it as done
+in `<inbox>/.processed/<machine id>.json`. Transcribers leave a heartbeat in
+`<inbox>/.transcribers/<machine id>.json`, refreshed at most once an hour; a
+recorder's `meeting doctor` warns when nobody has transcribed for 48 hours.
+Several transcribers can share one inbox.
+
+Every machine writes only its own files in the inbox, so the sync client
+never sees two machines edit the same file. The machine id is random, made
+once and kept in `~/.nemeda/state/machine.json` with a readable label (the
+Mac's computer name, or the hostname when it does not come from the
+network); set `NEMEDA_MACHINE_LABEL` in `.env.local` to choose another.
+Hostnames are not used because DHCP and IPv6 change them from one network to
+the next.
 
 Recordings are big. Keep the inbox on a drive with room for them, and use
 `meetings.recordings` (`archive` to a drive folder, or `delete` after N
@@ -184,6 +193,13 @@ one line whenever recordings are waiting, so the agent can offer to run
 - **Two transcribers, one recording**: the second sees it as claimed and
   skips it. A claim left by a machine that crashed is released the next time
   that same machine runs.
+- **Drive warns about `.transcribers.json` or `.processed.json`**: kit
+  versions before per-machine files had every machine edit these two files,
+  and Drive retries the conflicting edits. Update the kit on every machine
+  that runs `meeting watch`. The new version still reads both files and never
+  writes them. `meeting doctor` names the machines that still write
+  `.transcribers.json` and says when it can be deleted; keep
+  `.processed.json`, which remembers what was transcribed before the update.
 - **Model too slow**: `meeting doctor` prints the estimate; switch the model
   with `meeting setup --model small`, install `yap` on an eligible Mac, or
   make this machine a recorder.
