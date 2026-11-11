@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -8,9 +8,15 @@ import {
   activeTranscribers,
   claimRecording,
   handOffRecording,
+  heartbeatPath,
+  isNetworkDerivedName,
+  legacyHeartbeatStatus,
   listClaims,
+  machineIdentity,
+  machineIdentityPath,
   readSharedState,
   reclaimStale,
+  recordSharedEntries,
   releaseClaim,
   resolveRole,
   writeHeartbeat
@@ -88,6 +94,8 @@ fs.writeFileSync(base + ".json", JSON.stringify({ result: { language: "es" }, tr
     NEMEDA_FFMPEG_BIN: ffmpeg,
     NEMEDA_WHISPER_BIN: whisper,
     NEMEDA_WHISPER_MODEL: model,
+    // Each call is a different machine, with its own machine id.
+    NEMEDA_HOME: temporaryDirectory(),
     ...environment
   };
 }
@@ -115,14 +123,63 @@ test("claims rename atomically, are listed per host, and stale ones of this host
   assert.equal(listClaims(temporaryDirectory()).length, 0);
 });
 
-test("heartbeats record transcribers and expire", () => {
+test("machine identity is made once, kept, and relabelled only on request", () => {
+  const environment = { NEMEDA_HOME: temporaryDirectory() };
+  const first = machineIdentity(environment);
+  assert.match(first.id, /^[0-9a-f]{16}$/);
+  assert.ok(first.label);
+  assert.equal(existsSync(machineIdentityPath(environment)), true);
+  assert.deepEqual(machineIdentity(environment), first, "the same id on every run");
+  assert.deepEqual(machineIdentity({ ...environment, NEMEDA_MACHINE_LABEL: " Ana's Mac " }), { id: first.id, label: "Ana's Mac" });
+  assert.notEqual(machineIdentity({ NEMEDA_HOME: temporaryDirectory() }).id, first.id, "another machine, another id");
+  for (const name of ["2a02-9130-8b12-4c00-1d2e", "192-168-1-20", "dhcp-10", "eduroam-4711"]) assert.equal(isNetworkDerivedName(name), true, name);
+  for (const name of ["MacBook-de-Ana", "gpu-box", "whisper01"]) assert.equal(isNetworkDerivedName(name), false, name);
+});
+
+test("heartbeats: one file per machine, throttled, expiring, legacy file read but never written", () => {
   const inbox = temporaryDirectory();
-  writeHeartbeat(inbox, "fast-mac", { engine: "apple-speech" }, new Date(Date.now() - 1000));
-  writeHeartbeat(inbox, "old-pc", { engine: "whisper-cpp" }, new Date(Date.now() - 3 * 24 * 3_600_000));
-  const active = activeTranscribers(inbox);
-  assert.deepEqual(active.map((beat) => beat.host), ["fast-mac"]);
-  assert.equal(active[0].engine, "apple-speech");
+  const mac = { id: "aaaa1111bbbb2222", label: "fast-mac" };
+  const pc = { id: "cccc3333dddd4444", label: "old-pc" };
+  const now = Date.now();
+  assert.equal(writeHeartbeat(inbox, mac, { engine: "apple-speech" }, new Date(now - 1000)).written, true);
+  writeHeartbeat(inbox, pc, { engine: "whisper-cpp" }, new Date(now - 3 * 24 * 3_600_000));
+  assert.deepEqual(readdirSync(path.join(inbox, ".transcribers")).sort(), ["aaaa1111bbbb2222.json", "cccc3333dddd4444.json"]);
+  assert.equal(existsSync(path.join(inbox, ".transcribers.json")), false, "the legacy file is never written");
+  const active = activeTranscribers(inbox, now);
+  assert.deepEqual(active.map((beat) => [beat.id, beat.label, beat.engine]), [[mac.id, "fast-mac", "apple-speech"]]);
   assert.equal(activeTranscribers(temporaryDirectory()).length, 0);
+
+  // Every watcher pass calls it; the file changes once an hour, or when what it says changes.
+  const before = readFileSync(heartbeatPath(inbox, mac.id), "utf8");
+  assert.equal(writeHeartbeat(inbox, mac, { engine: "apple-speech" }, new Date(now + 30 * 60_000)).written, false);
+  assert.equal(readFileSync(heartbeatPath(inbox, mac.id), "utf8"), before);
+  assert.equal(writeHeartbeat(inbox, mac, { engine: "whisper-cpp" }, new Date(now + 31 * 60_000)).written, true);
+  assert.equal(writeHeartbeat(inbox, mac, { engine: "whisper-cpp" }, new Date(now + 92 * 60_000)).written, true);
+
+  // Hosts of the old single file still count until they go stale.
+  writeFileSync(path.join(inbox, ".transcribers.json"), JSON.stringify({ "2a02-9130-x": { engine: "whisper-cpp", lastSeen: new Date(now - 3_600_000).toISOString() } }));
+  assert.deepEqual(activeTranscribers(inbox, now).map((beat) => [beat.label, Boolean(beat.legacy)]), [["fast-mac", false], ["2a02-9130-x", true]]);
+  assert.deepEqual(legacyHeartbeatStatus(inbox, now).recent, ["2a02-9130-x"]);
+  assert.deepEqual(legacyHeartbeatStatus(inbox, now + 3 * 24 * 3_600_000).recent, []);
+  assert.equal(legacyHeartbeatStatus(temporaryDirectory()), null);
+});
+
+test("shared processed state: each machine writes its own file, reads merge every file and the legacy one", () => {
+  const inbox = temporaryDirectory();
+  const record = (name, extra = {}) => ({ path: name, size: 5, mtime: 1000, transcript: `docs/transcripts/${name}`, ...extra });
+  writeFileSync(path.join(inbox, ".processed.json"), JSON.stringify({ processed: [record("old.mkv")] }));
+  recordSharedEntries(inbox, "aaaa1111bbbb2222", [record("a.mkv")]);
+  recordSharedEntries(inbox, "cccc3333dddd4444", [record("b.mkv")]);
+  // One machine completes a record another wrote (archive, retention sweep).
+  recordSharedEntries(inbox, "cccc3333dddd4444", [record("a.mkv", { deletedAt: "2026-11-01T00:00:00.000Z" })]);
+  recordSharedEntries(inbox, "aaaa1111bbbb2222", [record("a.mkv", { archivedTo: "docs/recordings/archive/a.mkv" })]);
+  const merged = readSharedState(inbox).processed;
+  assert.deepEqual(merged.map((entry) => entry.path).sort(), ["a.mkv", "b.mkv", "old.mkv"]);
+  const a = merged.find((entry) => entry.path === "a.mkv");
+  assert.equal(a.deletedAt, "2026-11-01T00:00:00.000Z");
+  assert.equal(a.archivedTo, "docs/recordings/archive/a.mkv");
+  assert.equal(JSON.parse(readFileSync(path.join(inbox, ".processed", "aaaa1111bbbb2222.json"), "utf8")).processed.length, 1, "upsert, not append");
+  assert.deepEqual(JSON.parse(readFileSync(path.join(inbox, ".processed.json"), "utf8")).processed.map((entry) => entry.path), ["old.mkv"], "the legacy file is untouched");
 });
 
 test("handOffRecording copies through a temporary name and never overwrites", () => {
@@ -194,7 +251,10 @@ test("recorder hands off, transcriber drains the inbox, and the shared state kee
   assert.equal(listClaims(team.inbox).length, 0);
   assert.deepEqual(readdirSync(team.inbox).filter((name) => !name.startsWith(".")).sort(), ["2026-09-10 09-00-00.mkv", "2026-09-10 11-00-00.mkv"]);
   assert.equal(readSharedState(team.inbox).processed.length, 2);
-  assert.equal(activeTranscribers(team.inbox).length, 1);
+  const transcriberId = machineIdentity(transcriberEnv).id;
+  assert.deepEqual(readdirSync(path.join(team.inbox, ".processed")), [`${transcriberId}.json`]);
+  assert.equal(existsSync(path.join(team.inbox, ".processed.json")), false, "no shared single file");
+  assert.deepEqual(activeTranscribers(team.inbox).map((beat) => beat.id), [transcriberId]);
   assert.equal(readState(team.transcriber).processed.length, 0, "inbox work is not recorded in the local state");
 
   // A second transcriber on the same inbox finds nothing left.
@@ -215,16 +275,21 @@ function makeTeamMachine(team) {
 test("a file claimed by another machine is skipped and a stale own claim is recovered", () => {
   const team = makeTeam();
   const mine = writeRecording(team.inbox, "2026-09-10 09-00-00.mkv", { content: "mine" });
+  const before = writeRecording(team.inbox, "2026-09-10 08-00-00.mkv", { content: "before the upgrade" });
   const theirs = writeRecording(team.inbox, "2026-09-10 10-00-00.mkv", { content: "theirs" });
-  claimRecording(theirs, "other-machine");
-  claimRecording(mine, os.hostname()); // left over from a run of this machine that died
   const env = withStubs({ NEMEDA_MEETINGS_ROLE: "transcriber" });
+  const other = { id: "eeee5555ffff6666", label: "gpu-box" };
+  writeHeartbeat(team.inbox, other, { engine: "whisper-cpp" });
+  claimRecording(theirs, other.id);
+  // Left over from runs of this machine that died: by machine id, and by hostname from an older version.
+  claimRecording(mine, machineIdentity(env).id);
+  claimRecording(before, os.hostname());
   const report = processRecordings(team.transcriber, { environment: env });
-  assert.equal(report.actions.some((entry) => entry.kind === "claim" && /stale claim/.test(entry.message)), true);
-  assert.equal(report.processed.length, 1);
+  assert.equal(report.actions.filter((entry) => entry.kind === "claim" && /stale claim/.test(entry.message)).length, 2);
+  assert.equal(report.processed.length, 2);
   assert.match(report.actions.find((entry) => entry.kind === "inbox").message, /1 claimed by other machines/);
-  assert.deepEqual(listClaims(team.inbox).map((claim) => claim.host), ["other-machine"]);
-  assert.equal(readSharedState(team.inbox).processed[0].path, path.basename(mine), "shared state stores names relative to the inbox");
+  assert.deepEqual(listClaims(team.inbox).map((claim) => [claim.host, claim.label]), [[other.id, "gpu-box"]]);
+  assert.deepEqual(readSharedState(team.inbox).processed.map((entry) => entry.path).sort(), [path.basename(before), path.basename(mine)], "shared state stores names relative to the inbox");
 });
 
 test("full role transcribes its own folder and the inbox; roles without an inbox are refused", () => {
@@ -264,8 +329,15 @@ test("doctor and session context follow the role", () => {
   assert.equal(byCode(recorderChecks, "meetings-inbox")[0].status, "pass");
   assert.equal(byCode(recorderChecks, "meetings-transcriber")[0].status, "warn");
   assert.equal(byCode(recorderChecks, "meetings-watch")[0].status, "pass");
-  writeHeartbeat(team.inbox, "fast-mac", { engine: "apple-speech" });
+  writeHeartbeat(team.inbox, { id: "aaaa1111bbbb2222", label: "fast-mac" }, { engine: "apple-speech" });
   assert.match(byCode(meetingDoctorChecks(team.recorder, team.config.meetings, team.config.drive, recorderEnv, { probe }), "meetings-transcriber")[0].message, /fast-mac \(apple-speech\)/);
+  assert.equal(byCode(recorderChecks, "meetings-legacy-heartbeat").length, 0);
+  const legacyFile = path.join(team.inbox, ".transcribers.json");
+  writeFileSync(legacyFile, JSON.stringify({ "old-pc": { engine: "whisper-cpp", lastSeen: new Date().toISOString() } }));
+  assert.match(byCode(meetingDoctorChecks(team.recorder, team.config.meetings, team.config.drive, recorderEnv, { probe }), "meetings-legacy-heartbeat")[0].message, /old-pc still write .*\.transcribers\.json.*update the kit/);
+  writeFileSync(legacyFile, JSON.stringify({ "old-pc": { engine: "whisper-cpp", lastSeen: new Date(Date.now() - 3 * 24 * 3_600_000).toISOString() } }));
+  assert.match(byCode(meetingDoctorChecks(team.recorder, team.config.meetings, team.config.drive, recorderEnv, { probe }), "meetings-legacy-heartbeat")[0].message, /no machine has written it in 48 h; delete it/);
+  rmSync(legacyFile);
 
   const transcriberEnv = { PATH: "/nonexistent", HOME: temporaryDirectory(), NEMEDA_MEETINGS_ROLE: "transcriber" };
   const transcriberChecks = meetingDoctorChecks(team.transcriber, team.config.meetings, team.config.drive, transcriberEnv, { probe });
